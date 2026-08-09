@@ -1,6 +1,8 @@
 # valorftc.ai
 
-Marketing site for Valor — the finance-native programming platform.
-Single self-contained page: `index.html` (no build step, no external assets).
+Valor — systematic trading, measured honestly.
 
-Hosted on GitHub Pages; DNS at Squarespace.
+Single self-contained page (`index.html`): no build step, no external assets, no CDN fonts.
+Positioned for corporate development / acquisition conversations.
+
+Hosted on GitHub Pages; DNS at Squarespace. Push to `main` redeploys.
