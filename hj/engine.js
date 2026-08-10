@@ -500,6 +500,136 @@ function bootstrapSharpeCI(r, ppy, samples, block, seed) {
   return [quantileSorted(out, 0.025), quantileSorted(out, 0.975)];
 }
 
+/* ---------------------------------------------------------- paper session */
+
+/* One paper session, bar by bar, in the order broker.Session fixes and a
+   strategy cannot bypass:
+
+     signal → vol target → risk limits → drawdown scalar → kill switch
+            → order → fill → reconcile → log
+
+   The kill switch sits after sizing and before the order, and fails closed.
+   Slippage is drawn around the modelled cost rather than fixed at it, because
+   a simulator that always fills at the modelled price teaches a comfortable
+   lie — and it is drawn from numpy's stream, so the fills are the desk's fills.
+
+   RiskLimits.apply reduces to a clip at max_position here: it is a fixed point
+   over per-name, gross and net limits, and with one name the gross and net
+   passes can never bind once the per-name clip has run. */
+function paperSession(o) {
+  o = o || {};
+  var prices = o.prices || [], dates = o.dates || [];
+  var strat = STRATEGIES[o.stratKey] || STRATEGIES.buy_hold;
+  var params = o.params || defaultParams(strat);
+  var sym = o.symbol || "SYNTHETIC";
+  var ppy = num(o.ppy, ANN);
+  var warmup = Math.max(0, Math.round(num(o.warmup, 260)));
+  var c = o.config || {};
+  var startEq = num(c.starting_equity, 100000);
+  var targetVol = num(c.target_annual_vol, 0.15);
+  var kelly = num(c.kelly_fraction, 0.25);
+  var maxLev = num(c.max_leverage, 2);
+  var maxPos = num(c.max_per_asset, 0.25);
+  var derisk = num(c.derisk_threshold, 0.10);
+  var halt = num(c.halt_threshold, 0.20);
+  var minScale = num(c.min_scale, 0.25);
+  var perTurnBps = num(o.perTurnBps, 4);
+
+  var n = prices.length;
+  var sig = strat.signal(prices, params);
+  var rets = pctChange(prices, 1);
+  var volRaw = rollingStd(rets, 20);
+  var vol = new Array(n), i;
+  for (i = 0; i < n; i++) vol[i] = i > 0 ? volRaw[i - 1] * Math.sqrt(ppy) : NaN;   // .shift(1)
+
+  var rng = new root.NPRandom(num(o.seed, 42));
+  var cash = startEq, pos = 0, fills = [], decisions = [];
+  var curve = [], stamps = [], targets = [];
+  var tripped = false, haltReason = null;
+  var peak = cash;                                   // no position on the first mark
+
+  function ddScalar(dd) {
+    if (dd <= derisk) return 1;
+    if (dd >= halt) return 0;
+    return Math.max(minScale, 1 - (dd - derisk) / (halt - derisk));
+  }
+
+  function submit(qty, px, ts) {
+    var notional = Math.abs(qty) * px;
+    var realisedBps = Math.max(0, perTurnBps + perTurnBps * 0.4 * rng.standardNormal());
+    var cost = notional * realisedBps / 10000;
+    var fillPx = px * (1 + sign(qty) * realisedBps / 10000);
+    cash -= qty * px + cost;                         // the cost is charged apart from the price
+    pos += qty;
+    if (Math.abs(pos) < 1e-12) pos = 0;
+    fills.push({ symbol: sym, quantity: qty, price: fillPx, cost: cost, ts: ts });
+  }
+
+  function rebalance(weight, px, eq, ts, reason) {
+    var delta = weight * eq / px - pos;
+    /* a 0.5% band, so the book does not churn on rounding noise */
+    if (Math.abs(delta * px) < 0.005 * eq) {
+      decisions.push(ts + " HOLD target=" + (weight >= 0 ? "+" : "") + weight.toFixed(2));
+      return;
+    }
+    submit(delta, px, ts);
+    decisions.push(ts + " TRADE " + (delta >= 0 ? "+" : "") + delta.toFixed(2) +
+                   " units -> weight " + (weight >= 0 ? "+" : "") + weight.toFixed(2) +
+                   " (" + reason + ")");
+  }
+
+  for (i = warmup; i < n; i++) {
+    /* the tape stamps each line with str(Timestamp), which carries the
+       midnight the bare date leaves off */
+    var ts = dates[i] ? dates[i] + " 00:00:00" : String(i), px = +prices[i];
+    var eq = cash + pos * px;
+    if (eq > peak) peak = eq;
+
+    var raw = +sig[i]; if (raw !== raw) raw = 0;
+    var v = vol[i];
+    var scaled = (finite(v) && v > 0) ? raw * (targetVol / v) : 0;
+    scaled *= kelly / 0.25;
+    scaled = Math.max(-maxLev, Math.min(maxLev, scaled));
+    scaled = Math.max(-maxPos, Math.min(maxPos, scaled));
+    scaled *= ddScalar(Math.abs(eq / peak - 1));
+
+    if (!tripped && (eq / peak - 1) <= -halt) {
+      tripped = true;
+      haltReason = "drawdown " + ((eq / peak - 1) * 100).toFixed(2) + "% breached halt limit " +
+                   (-halt * 100).toFixed(2) + "%";
+    }
+    if (tripped) {
+      if (pos !== 0) rebalance(0, px, eq, ts, "kill switch: flattening");
+      decisions.push(ts + " HALT " + haltReason);
+      curve.push(eq); stamps.push(ts); targets.push(0);
+      break;
+    }
+
+    rebalance(scaled, px, eq, ts, o.stratKey || "strategy");
+    curve.push(eq); stamps.push(ts); targets.push(scaled);
+  }
+
+  var notional = 0, paid = 0;
+  for (i = 0; i < fills.length; i++) {
+    notional += Math.abs(fills[i].quantity) * fills[i].price;
+    paid += fills[i].cost;
+  }
+  var realisedBps = fills.length && notional ? paid / notional * 10000 : NaN;
+  var ending = cash + pos * (+prices[n - 1]);
+
+  return {
+    symbol: sym, bars: curve.length,
+    equity_curve: curve, timestamps: stamps, target_positions: targets,
+    fills: fills, decisions: decisions,
+    halted: tripped, halt_reason: haltReason,
+    modelled_cost_bps: perTurnBps,
+    realised_cost_bps: realisedBps,
+    starting_equity: startEq, ending_equity: ending,
+    total_return: ending / startEq - 1,
+    cost_ratio: perTurnBps ? realisedBps / perTurnBps : NaN
+  };
+}
+
 /* --------------------------------------------------------------- backtest */
 
 function backtest(o) {
@@ -672,6 +802,7 @@ var JQ = {
   COSTS: COSTS,
   backtest: backtest,
   walkForward: walkForward,
+  paperSession: paperSession,
   M: {
     cagr: cagr,
     annVol: annVol,

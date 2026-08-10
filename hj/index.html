@@ -10,7 +10,7 @@
 <title>Hey Jamie — desk</title>
 <!-- The server may mount the static dir at /static/ or at /. Ask for the usual
      place first and only reach for the other if that request actually fails. -->
-<link rel="stylesheet" href="app.css"
+<link rel="stylesheet" href="app.css?v=3"
       onerror="var l=document.createElement('link');l.rel='stylesheet';l.href='/app.css';document.head.appendChild(l);">
 </head>
 <body>
@@ -412,13 +412,13 @@
 
 <!-- Deferred scripts keep their order, so models.js can count on app.js's
      helpers existing by the time anything calls them. -->
-<script src="nprandom.js" defer></script>
-<script src="engine.js" defer></script>
-<script src="shim.js" defer></script>
-<script src="app.js" defer></script>
-<script src="models.js" defer></script>
-<script src="tape.js" defer></script>
-<script src="portfolio.js" defer></script>
+<script src="nprandom.js?v=3" defer></script>
+<script src="engine.js?v=3" defer></script>
+<script src="shim.js?v=3" defer></script>
+<script src="app.js?v=3" defer></script>
+<script src="models.js?v=3" defer></script>
+<script src="tape.js?v=3" defer></script>
+<script src="portfolio.js?v=3" defer></script>
 <!-- Deferred scripts run before DOMContentLoaded, so by the time this fires the
      tags above have either taken or not. Only then try the other mount points.
      app.js is recovered first: models.js and tape.js are useless without it, and

@@ -220,6 +220,43 @@
     };
   }
 
+  function runPaper(spec) {
+    var key = pickStrategy(spec.strategy);
+    var p = normParams(key, spec.params);
+    var data = dataFor(spec);
+    var st = cache["state.json"] || {};
+    var costs = ((st.costs || {})[spec.asset_class]) || (st.costs || {}).equity || {};
+    var res = JQ.paperSession({
+      prices: data.prices, dates: data.dates, stratKey: key, params: p,
+      symbol: "SYNTHETIC", ppy: 252,
+      warmup: Math.max(0, Math.round(+spec.warmup || 260)),
+      seed: (spec.data && spec.data.seed !== undefined) ? +spec.data.seed : 42,
+      config: st.config || {},
+      perTurnBps: costs.per_turn_bps
+    });
+    return {
+      symbol: res.symbol,
+      strategy: labelFor(key, p).replace(" on SYNTHETIC", ""),
+      bars: res.bars,
+      starting_equity: res.starting_equity,
+      ending_equity: res.ending_equity,
+      total_return: res.total_return,
+      n_fills: res.fills.length,
+      modelled_cost_bps: res.modelled_cost_bps,
+      realised_cost_bps: res.realised_cost_bps,
+      cost_ratio: res.cost_ratio,
+      halted: res.halted,
+      halt_reason: res.halt_reason,
+      equity_curve: thin(res.equity_curve, 1200),
+      decisions: res.decisions.slice(-60),
+      /* The desk fills this from risk.prop — a 2% daily / 6% total ladder that
+         is a module of its own, not ported here. Null is the shape the desk
+         already sends for the two blocks it does not build, so the panel
+         handles it. */
+      prop_report: null
+    };
+  }
+
   function runValidate(spec) {
     var key = pickStrategy(spec.strategy);
     var p = normParams(key, spec.params);
@@ -257,6 +294,7 @@
         var out;
         if (spec.kind === "backtest") out = runBacktest(spec);
         else if (spec.kind === "validate") out = runValidate(spec);
+        else if (spec.kind === "paper") out = runPaper(spec);
         else {
           job.status = "error";
           job.error = spec.kind + " needs the local desk (it writes files or talks to a venue).";
@@ -314,10 +352,11 @@
     if (path === "/api/run" && method === "POST") {
       if (!JQ) return json({ error: "engine failed to load" }, 500);
       var kind = (body && body.kind) || "backtest";
-      if (kind !== "backtest" && kind !== "validate") {
+      if (kind !== "backtest" && kind !== "validate" && kind !== "paper") {
         return json({
           error: kind + " is not available in the browser build — it needs the " +
-                 "local desk. Backtest and walk-forward validation both run here."
+                 "local desk. Backtest, walk-forward validation and the paper " +
+                 "session all run here."
         }, 501);
       }
       return json({ job_id: startJob(body || {}) });
