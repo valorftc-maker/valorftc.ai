@@ -1,0 +1,1456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Hey Jamie — Valor FTC desk</title>
+<meta name="description" content="The Hey Jamie research desk, running entirely in your browser.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0E141C">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20fill='%230E141C'/%3E%3Cpath%20d='M8%2044%20L24%2020%20L36%2038%20L56%2010'%20fill='none'%20stroke='%2345D6BE'%20stroke-width='5'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E">
+<script>
+/* ---------------- Hey Jamie engine (ported from Jamie.Quant) ---------------- */
+/* Jamie.Quant engine — vanilla ES5, zero dependencies, browser + node.
+   Direct port of the Python (numpy/pandas) reference engine.
+
+   Deliberate deviation: the seeded RNG here is mulberry32 + Box-Muller, which
+   does NOT reproduce numpy default_rng's exact stream. Same distributions,
+   same seed-reproducibility, different draws. Everything else — the t+1
+   position shift, ddof=1, the cost model, the deflation formula — is exact.
+*/
+(function (root) {
+"use strict";
+
+var ANN = 252;                 // PERIODS["daily"]
+var TWO_PI = 6.283185307179586;
+var EULER = 0.5772156649;      // Euler-Mascheroni, used by the deflated Sharpe
+
+/* ------------------------------------------------------------------ utils */
+
+function num(v, dflt) {
+  var x = +v;
+  return (x === x && x !== Infinity && x !== -Infinity) ? x : dflt;
+}
+function finite(x) { return x === x && x !== Infinity && x !== -Infinity; }
+
+/* pandas .dropna(): scalar metrics ignore missing bars entirely rather than
+   propagating NaN through sums. Leading rolling-window / pct_change warm-up
+   NaNs therefore never poison a metric. */
+function clean(a) {
+  var out = [], i, v, n = a ? a.length : 0;
+  for (i = 0; i < n; i++) { v = +a[i]; if (finite(v)) out.push(v); }
+  return out;
+}
+function clampInt(v, dflt, lo, hi) {
+  var x = Math.round(num(v, dflt));
+  if (x < lo) x = lo;
+  if (x > hi) x = hi;
+  return x;
+}
+function sign(x) { return x > 0 ? 1 : (x < 0 ? -1 : 0); }
+
+function pctChange(x, k) {
+  var n = x.length, out = new Array(n), i, prev;
+  for (i = 0; i < n; i++) {
+    if (i < k) { out[i] = NaN; continue; }
+    prev = +x[i - k];
+    out[i] = (prev === 0 || !finite(prev)) ? NaN : (+x[i]) / prev - 1;
+  }
+  return out;
+}
+
+function rollingMean(x, w) {
+  var n = x.length, out = new Array(n), s = 0, i;
+  for (i = 0; i < n; i++) {
+    s += +x[i];
+    if (i >= w) s -= +x[i - w];
+    out[i] = (i >= w - 1) ? s / w : NaN;
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------- RNG */
+
+var imul = Math.imul || function (a, b) {
+  var ah = (a >>> 16) & 0xffff, al = a & 0xffff;
+  var bh = (b >>> 16) & 0xffff, bl = b & 0xffff;
+  return ((al * bl) + (((ah * bl + al * bh) << 16) >>> 0)) | 0;
+};
+
+function mulberry32(seed) {
+  var a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    var t = imul(a ^ (a >>> 15), 1 | a);
+    t = (t + imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function RNG(seed) { this._u = mulberry32(seed >>> 0); this._spare = null; }
+RNG.prototype.next = function () { return this._u(); };
+RNG.prototype.normal = function () {                 // Box-Muller, both halves used
+  if (this._spare !== null) { var s = this._spare; this._spare = null; return s; }
+  var u1 = 1 - this._u();                            // (0,1] so log() is safe
+  var u2 = this._u();
+  var r = Math.sqrt(-2 * Math.log(u1)), th = TWO_PI * u2;
+  this._spare = r * Math.sin(th);
+  return r * Math.cos(th);
+};
+/* Student-t via Z / sqrt(chi2_df / df); chi2 with even df is 2 * Gamma(df/2,1),
+   and Gamma(k,1) for integer k is the sum of k exponentials. df=4 here. */
+RNG.prototype.studentT = function (df) {
+  var z = this.normal(), c = 0, k = df >> 1, i;
+  for (i = 0; i < k; i++) c += -Math.log(1 - this._u());
+  if (df & 1) { var g = this.normal(); c += 0.5 * g * g; }
+  c *= 2;
+  return z / Math.sqrt(c / df);
+};
+
+/* ------------------------------------------------------------------ dates */
+
+function parseISOUTC(s) {
+  var p = String(s).slice(0, 10).split("-");
+  var y = parseInt(p[0], 10), m = parseInt(p[1], 10), d = parseInt(p[2], 10);
+  if (!(y > 0) || !(m > 0) || !(d > 0)) return new Date(Date.UTC(2015, 0, 2));
+  return new Date(Date.UTC(y, m - 1, d));
+}
+function fmtISO(d) {
+  var y = d.getUTCFullYear(), m = d.getUTCMonth() + 1, dd = d.getUTCDate();
+  return y + "-" + (m < 10 ? "0" : "") + m + "-" + (dd < 10 ? "0" : "") + dd;
+}
+function businessDates(startISO, n) {
+  var d = parseISOUTC(startISO), out = [], dow;
+  while (out.length < n) {
+    dow = d.getUTCDay();
+    if (dow !== 0 && dow !== 6) out.push(fmtISO(d));
+    d = new Date(d.getTime() + 86400000);            // UTC has no DST, safe
+  }
+  return out;
+}
+
+/* --------------------------------------------------------------- synth */
+
+function synth(o) {
+  o = o || {};
+  var n = Math.max(2, Math.round(num(o.n, 2520)));
+  var mu = num(o.mu, 0.07), sigma = num(o.sigma, 0.20);
+  var seed = (o.seed === undefined || o.seed === null) ? 42 : (num(o.seed, 42) | 0);
+  var fat = !!o.fatTails, vc = !!o.volClustering;
+  var rng = new RNG(seed), dt = 1 / ANN, sdt = Math.sqrt(dt), i;
+
+  var shocks = new Float64Array(n);
+  for (i = 0; i < n; i++) shocks[i] = fat ? rng.studentT(4) / Math.SQRT2 : rng.normal();
+
+  var sig = new Float64Array(n);
+  if (vc) {                                          // GARCH(1,1) on daily variance
+    var omega = 0.00001, alpha = 0.10, beta = 0.88, v = sigma * sigma / ANN, e;
+    sig[0] = sigma;
+    for (i = 1; i < n; i++) {
+      e = shocks[i - 1] * Math.sqrt(v);
+      v = omega + alpha * e * e + beta * v;
+      sig[i] = Math.sqrt(v * ANN);                   // annualised vol path
+    }
+  } else {
+    for (i = 0; i < n; i++) sig[i] = sigma;
+  }
+
+  var prices = new Array(n), c = 0;                  // cumsum of log returns
+  for (i = 0; i < n; i++) {
+    c += (mu - 0.5 * sig[i] * sig[i]) * dt + sig[i] * sdt * shocks[i];
+    prices[i] = 100 * Math.exp(c);
+  }
+  return { dates: businessDates(o.start || "2015-01-02", n), prices: prices };
+}
+
+/* ------------------------------------------------------------- strategies */
+
+var STRATEGIES = {
+  sma_cross: {
+    label: "SMA cross",
+    params: [
+      { key: "fast", label: "Fast", def: 42, min: 2, max: 200 },
+      { key: "slow", label: "Slow", def: 252, min: 5, max: 400 },
+      { key: "allowShort", label: "Allow short", def: true, type: "bool" }
+    ],
+    hypothesis: "Price trends persist: when the fast average sits above the slow one the drift is positive, so hold long, and hold short (or flat) otherwise.",
+    signal: function (prices, p) {
+      p = p || {};
+      var fast = clampInt(p.fast, 42, 2, 200), slow = clampInt(p.slow, 252, 5, 400);
+      var allowShort = (p.allowShort === undefined) ? true : !!p.allowShort;
+      var f = rollingMean(prices, fast), s = rollingMean(prices, slow);
+      var n = prices.length, out = new Array(n), other = allowShort ? -1 : 0, i;
+      for (i = 0; i < n; i++) {
+        /* numpy where(f > s, ...) treats any NaN comparison as False -> else
+           branch; the reference then forces 0.0 wherever the slow MA is still
+           warming up, so the flat warm-up wins over the else value. */
+        out[i] = (s[i] !== s[i]) ? 0 : (f[i] > s[i] ? 1 : other);
+      }
+      return out;
+    }
+  },
+  ts_momentum: {
+    label: "Time-series momentum",
+    params: [{ key: "lookback", label: "Lookback", def: 126, min: 5, max: 400 }],
+    hypothesis: "The sign of the last N-bar return predicts the next bar's sign: ride winners, flip short after losers.",
+    signal: function (prices, p) {
+      p = p || {};
+      var lb = clampInt((p || {}).lookback, 126, 5, 400);
+      var r = pctChange(prices, lb), n = prices.length, out = new Array(n), i;
+      for (i = 0; i < n; i++) out[i] = finite(r[i]) ? sign(r[i]) : 0;   // fillna(0)
+      return out;
+    }
+  },
+  buy_hold: {
+    label: "Buy and hold",
+    params: [],
+    hypothesis: "The asset carries a positive risk premium, so the honest benchmark is to be fully invested at all times and pay no turnover.",
+    signal: function (prices) {
+      var n = prices.length, out = new Array(n), i;
+      for (i = 0; i < n; i++) out[i] = 1;
+      return out;
+    }
+  }
+};
+
+/* ------------------------------------------------------------------ costs */
+
+var COSTS = { spreadBps: 2, commissionBps: 1, slippageBps: 1, borrowBpsAnn: 50 };
+
+function mergeCosts(c) {
+  c = c || {};
+  return {
+    spreadBps: num(c.spreadBps, COSTS.spreadBps),
+    commissionBps: num(c.commissionBps, COSTS.commissionBps),
+    slippageBps: num(c.slippageBps, COSTS.slippageBps),
+    borrowBpsAnn: num(c.borrowBpsAnn, COSTS.borrowBpsAnn)
+  };
+}
+
+/* ---------------------------------------------------------------- metrics */
+
+function cagr(r, ppy) {
+  var a = clean(r), n = a.length, i, total = 1;
+  ppy = num(ppy, ANN);
+  if (!n) return NaN;
+  for (i = 0; i < n; i++) total *= (1 + a[i]);
+  if (total <= 0) return -1;                         // wiped out
+  return Math.pow(total, 1 / (n / ppy)) - 1;
+}
+
+function stdev1(a) {                                 // ddof = 1, the sample std
+  var n = a.length, i, m = 0, s = 0, d;
+  if (n < 2) return NaN;
+  for (i = 0; i < n; i++) m += a[i];
+  m /= n;
+  for (i = 0; i < n; i++) { d = a[i] - m; s += d * d; }
+  return Math.sqrt(s / (n - 1));
+}
+function mean(a) {
+  var n = a.length, i, m = 0;
+  if (!n) return NaN;
+  for (i = 0; i < n; i++) m += a[i];
+  return m / n;
+}
+
+function annVol(r, ppy) {
+  var a = clean(r);
+  ppy = num(ppy, ANN);
+  return a.length < 2 ? NaN : stdev1(a) * Math.sqrt(ppy);
+}
+
+function sharpe(r, ppy) {                            // rf = 0
+  var a = clean(r), sd;
+  ppy = num(ppy, ANN);
+  if (a.length < 2) return NaN;
+  sd = stdev1(a);
+  if (!(sd > 0)) return NaN;
+  return mean(a) / sd * Math.sqrt(ppy);
+}
+
+function sharpeStderr(sr, n) {
+  if (!finite(sr) || !(n > 0)) return NaN;
+  return Math.sqrt((1 + 0.5 * sr * sr) / n);         // Lo (2002) IID stderr
+}
+
+function sortino(r, ppy) {
+  var a = clean(r), i, s = 0, k = 0, dd;
+  ppy = num(ppy, ANN);
+  if (!a.length) return NaN;
+  for (i = 0; i < a.length; i++) if (a[i] < 0) { s += a[i] * a[i]; k++; }
+  if (!k) return NaN;                                // numpy: mean of empty -> nan
+  dd = Math.sqrt(s / k);
+  if (!(dd > 0)) return NaN;
+  return mean(a) / dd * Math.sqrt(ppy);
+}
+
+/* Alignment-preserving: NaN in, NaN out at the same index, so the curve can be
+   plotted against the price series without an offset. */
+function equityCurve(r) {
+  var n = r ? r.length : 0, out = new Array(n), eq = 1, i, v;
+  for (i = 0; i < n; i++) {
+    v = +r[i];
+    if (finite(v)) { eq *= (1 + v); out[i] = eq; } else { out[i] = NaN; }
+  }
+  return out;
+}
+function drawdownSeries(eq) {
+  var n = eq ? eq.length : 0, out = new Array(n), peak = -Infinity, i, v;
+  for (i = 0; i < n; i++) {
+    v = +eq[i];
+    if (!finite(v)) { out[i] = NaN; continue; }
+    if (v > peak) peak = v;
+    out[i] = (peak !== 0) ? v / peak - 1 : NaN;
+  }
+  return out;
+}
+function maxDrawdown(dd) {
+  var a = clean(dd), i, m = NaN;
+  for (i = 0; i < a.length; i++) if (!(m <= a[i])) m = a[i];
+  return a.length ? m : NaN;
+}
+function maxDrawdownDuration(dd) {
+  var a = clean(dd), i, run = 0, best = 0;
+  for (i = 0; i < a.length; i++) {
+    if (a[i] < 0) { run++; if (run > best) best = run; } else { run = 0; }
+  }
+  return best;
+}
+function calmar(c, mdd) {
+  if (!finite(c) || !finite(mdd) || mdd === 0) return NaN;
+  return c / Math.abs(mdd);
+}
+function hitRate(r) {
+  var a = clean(r), i, up = 0, nz = 0;
+  for (i = 0; i < a.length; i++) if (a[i] !== 0) { nz++; if (a[i] > 0) up++; }
+  return nz ? up / nz : NaN;
+}
+function profitFactor(r) {
+  var a = clean(r), i, p = 0, l = 0;
+  for (i = 0; i < a.length; i++) { if (a[i] > 0) p += a[i]; else if (a[i] < 0) l += a[i]; }
+  if (l === 0) return p > 0 ? Infinity : NaN;
+  return p / -l;
+}
+/* mean(|diff(pos)|) * ppy — np.diff, so n-1 terms; pos[0] is not a turn. */
+/* Keep only the positions on bars where `net` is finite, mirroring the
+   dropna-aligned index the Python engine reports metrics over. */
+function alignedPositions(pos, net) {
+  var out = [], i, n = pos ? pos.length : 0;
+  for (i = 0; i < n; i++) { if (finite(+net[i])) out.push(+pos[i]); }
+  return out;
+}
+
+function turnover(pos, ppy) {
+  var n = pos ? pos.length : 0, i, s = 0, k = 0, a, b;
+  ppy = num(ppy, ANN);
+  for (i = 1; i < n; i++) {
+    a = num(pos[i], NaN); b = num(pos[i - 1], NaN);
+    if (finite(a) && finite(b)) { s += Math.abs(a - b); k++; }
+  }
+  return k ? (s / k) * ppy : NaN;
+}
+
+/* Acklam's rational approximation to the inverse normal CDF (|rel err| < 1.15e-9).
+   Stands in for scipy.stats.norm.ppf. */
+var _A = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+          1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00];
+var _B = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+          6.680131188771972e+01, -1.328068155288572e+01];
+var _C = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+          -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00];
+var _D = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+          3.754408661907416e+00];
+
+function normPPF(p) {
+  p = +p;
+  if (!(p === p)) return NaN;
+  if (p <= 0) return -Infinity;
+  if (p >= 1) return Infinity;
+  var q, r;
+  if (p < 0.02425) {
+    q = Math.sqrt(-2 * Math.log(p));
+    return (((((_C[0] * q + _C[1]) * q + _C[2]) * q + _C[3]) * q + _C[4]) * q + _C[5]) /
+           ((((_D[0] * q + _D[1]) * q + _D[2]) * q + _D[3]) * q + 1);
+  }
+  if (p > 0.97575) {
+    q = Math.sqrt(-2 * Math.log(1 - p));
+    return -(((((_C[0] * q + _C[1]) * q + _C[2]) * q + _C[3]) * q + _C[4]) * q + _C[5]) /
+            ((((_D[0] * q + _D[1]) * q + _D[2]) * q + _D[3]) * q + 1);
+  }
+  q = p - 0.5; r = q * q;
+  return (((((_A[0] * r + _A[1]) * r + _A[2]) * r + _A[3]) * r + _A[4]) * r + _A[5]) * q /
+         (((((_B[0] * r + _B[1]) * r + _B[2]) * r + _B[3]) * r + _B[4]) * r + 1);
+}
+
+/* Deflated Sharpe: subtract the Sharpe the best of n_trials random strategies
+   would be expected to show by luck alone (Bailey & Lopez de Prado), scaled by
+   the estimation stderr. n_trials <= 1 means nothing was selected, no haircut. */
+function deflatedSharpe(sr, nTrials, nObs) {
+  if (!finite(sr)) return NaN;
+  nTrials = num(nTrials, 1);
+  if (nTrials <= 1) return sr;
+  var z = (1 - EULER) * normPPF(1 - 1 / nTrials) +
+          EULER * normPPF(1 - 1 / (nTrials * Math.E));
+  var se = Math.sqrt((1 + 0.5 * sr * sr) / nObs);
+  return sr - z * se;
+}
+
+/* ------------------------------------------------------- block bootstrap */
+
+function quantileSorted(a, q) {
+  var n = a.length;
+  if (!n) return NaN;
+  var h = (n - 1) * q, lo = Math.floor(h), hi = Math.ceil(h);
+  if (lo === hi) return a[lo];
+  return a[lo] + (h - lo) * (a[hi] - a[lo]);
+}
+
+/* Stationary-block bootstrap of the Sharpe: resample contiguous ~21-bar blocks
+   (a month) so serial dependence survives, then read the 2.5/97.5 percentiles.
+   Fixed internal seed keeps the CI reproducible across reloads. */
+function bootstrapSharpeCI(r, ppy, samples, block, seed) {
+  var a = clean(r), n = a.length;
+  if (n < 8) return [NaN, NaN];
+  samples = Math.max(1, Math.round(num(samples, 1000)));
+  block = Math.max(1, Math.min(Math.round(num(block, 21)), Math.max(1, n >> 1)));
+  var src = new Float64Array(n), i;
+  for (i = 0; i < n; i++) src[i] = a[i];
+  var rng = mulberry32(num(seed, 0x5EED17) | 0);
+  var out = new Float64Array(samples);
+  var starts = n - block + 1, k, filled, s, sum, sumsq, v, m, varr, sd, j;
+  var sq = Math.sqrt(num(ppy, ANN));
+  for (k = 0; k < samples; k++) {
+    sum = 0; sumsq = 0; filled = 0;
+    while (filled < n) {
+      s = (rng() * starts) | 0;
+      if (s >= starts) s = starts - 1;
+      for (j = 0; j < block && filled < n; j++, filled++) {
+        v = src[s + j]; sum += v; sumsq += v * v;
+      }
+    }
+    m = sum / n;
+    varr = (sumsq - n * m * m) / (n - 1);
+    sd = varr > 0 ? Math.sqrt(varr) : 0;
+    out[k] = sd > 0 ? (m / sd) * sq : NaN;
+  }
+  out.sort();                                        // typed arrays sort numerically
+  return [quantileSorted(out, 0.025), quantileSorted(out, 0.975)];
+}
+
+/* --------------------------------------------------------------- backtest */
+
+function backtest(o) {
+  o = o || {};
+  var prices = o.prices || [], sig = o.signal || [];
+  var n = prices.length, i;
+  var ppy = num(o.ppy, ANN);
+  var costs = mergeCosts(o.costs);
+  var nTrials = num(o.nTrials, 1);
+
+  var perTurn = (costs.spreadBps + costs.commissionBps + costs.slippageBps) / 10000;
+  var borrow = (costs.borrowBpsAnn / 10000) / ppy;
+
+  var ret = pctChange(prices, 1);                    // ret[0] = NaN, like pct_change()
+
+  /* THE t+1 SHIFT: positions = signal.shift(1).fillna(0). A signal computed
+     from today's close can only be traded into tomorrow's return, so position
+     i earns return i while being decided at i-1. Dropping this shift is what
+     manufactures look-ahead alpha. */
+  var pos = new Array(n), s;
+  if (n) pos[0] = 0;
+  for (i = 1; i < n; i++) { s = +sig[i - 1]; pos[i] = (s === s) ? s : 0; }
+
+  var gross = new Array(n), cost = new Array(n), net = new Array(n), trade, hold;
+  for (i = 0; i < n; i++) {
+    /* trading cost = |diff(pos)| * per-turn; the first bar is charged
+       |pos[0]| because opening the initial position is itself a turn. */
+    trade = (i === 0 ? Math.abs(pos[0]) : Math.abs(pos[i] - pos[i - 1])) * perTurn;
+    hold = Math.abs(Math.min(pos[i], 0)) * borrow;   // borrow fee on shorts only
+    cost[i] = trade + hold;
+    gross[i] = pos[i] * ret[i];                      // 0 * NaN = NaN, same as pandas
+    net[i] = gross[i] - cost[i];
+  }
+
+  var equity = equityCurve(net);
+  var drawdown = drawdownSeries(equity);
+
+  var netC = clean(net), grossC = clean(gross);
+  var nObs = netC.length;
+  var srNet = sharpe(netC, ppy);
+  var cagrNet = cagr(netC, ppy), cagrGross = cagr(grossC, ppy);
+  var mdd = maxDrawdown(drawdown);
+
+  var doBoot = (o.bootstrap === undefined) ? true : !!o.bootstrap;
+  var bsamples = 1000, bblock = 21, bseed = 0x5EED17;
+  if (typeof o.bootstrap === "number") { bsamples = o.bootstrap; doBoot = o.bootstrap > 0; }
+  else if (o.bootstrap && typeof o.bootstrap === "object") {
+    bsamples = num(o.bootstrap.samples, num(o.bootstrap.n, 1000));
+    bblock = num(o.bootstrap.block, 21);
+    bseed = num(o.bootstrap.seed, bseed);
+  }
+  var ci = doBoot ? bootstrapSharpeCI(netC, ppy, bsamples, bblock, bseed) : [NaN, NaN];
+
+  return {
+    gross: gross, net: net, positions: pos, cost: cost,
+    equity: equity, drawdown: drawdown,
+    m: {
+      cagrGross: cagrGross,
+      cagrNet: cagrNet,
+      annVol: annVol(netC, ppy),
+      sharpe: srNet,
+      sharpeGross: sharpe(grossC, ppy),
+      sharpeStderr: sharpeStderr(srNet, nObs),
+      sortino: sortino(netC, ppy),
+      maxDD: mdd,
+      maxDDDuration: maxDrawdownDuration(drawdown),
+      calmar: calmar(cagrNet, mdd),
+      hitRate: hitRate(netC),
+      profitFactor: profitFactor(netC),
+      /* pandas computes turnover on the *aligned* frame — the bars where net
+         is finite — so the mean runs over one fewer diff than the raw path.
+         Restrict to that same window or the figure comes out ~n/(n-1) high. */
+      turnover: turnover(alignedPositions(pos, net), ppy),
+      costDrag: (finite(cagrGross) && finite(cagrNet)) ? cagrGross - cagrNet : NaN,
+      deflated: deflatedSharpe(srNet, nTrials, nObs),
+      ciLo: ci[0], ciHi: ci[1],
+      nObs: nObs
+    }
+  };
+}
+
+/* ------------------------------------------------------------ walk-forward */
+
+function defaultParams(strat) {
+  var p = {}, i, d = strat.params || [];
+  for (i = 0; i < d.length; i++) p[d[i].key] = d[i].def;
+  return p;
+}
+
+/* Signal is fitted once on the full path (so each fold does not pay a fresh
+   warm-up), then the NET return stream is cut into N contiguous, near-
+   equal chunks - np.array_split semantics — and Sharpe is measured inside each
+   chunk alone. Stability across folds is the point, not the headline number. */
+function walkForward(o) {
+  o = o || {};
+  var prices = o.prices || [];
+  var strat = STRATEGIES[o.stratKey] || STRATEGIES.buy_hold;
+  var params = o.params || defaultParams(strat);
+  var ppy = num(o.ppy, ANN);
+  var folds = Math.max(1, Math.round(num(o.folds, 5)));
+
+  var bt = backtest({
+    prices: prices, signal: strat.signal(prices, params),
+    costs: o.costs, ppy: ppy, nTrials: 1, bootstrap: false
+  });
+  var r = clean(bt.net), m = r.length, out = [], i, k, start = 0, size;
+  var base = Math.floor(m / folds), extra = m % folds;
+
+  for (k = 0; k < folds; k++) {
+    size = base + (k < extra ? 1 : 0);
+    var chunk = [];
+    for (i = 0; i < size; i++) chunk.push(r[start + i]);
+    start += size;
+    out.push({ n: size, sharpe: sharpe(chunk, ppy) });
+  }
+
+  var pos = 0, cnt = 0, lo = Infinity, hi = -Infinity, sv;
+  for (k = 0; k < out.length; k++) {
+    sv = out[k].sharpe;
+    if (!finite(sv)) continue;
+    cnt++;
+    if (sv > 0) pos++;
+    if (sv < lo) lo = sv;
+    if (sv > hi) hi = sv;
+  }
+  return {
+    folds: out,
+    positive: cnt ? pos / cnt : NaN,                 // fraction in [0,1]
+    positivePct: cnt ? (pos / cnt) * 100 : NaN,      // same number as a percent
+    spread: cnt ? hi - lo : NaN
+  };
+}
+
+/* ------------------------------------------------------------------ export */
+
+var JQ = {
+  PERIODS: { daily: ANN },
+  synth: synth,
+  STRATEGIES: STRATEGIES,
+  COSTS: COSTS,
+  backtest: backtest,
+  walkForward: walkForward,
+  M: {
+    cagr: cagr,
+    annVol: annVol,
+    sharpe: sharpe,
+    sharpeStderr: sharpeStderr,
+    sortino: sortino,
+    equityCurve: equityCurve,
+    drawdownSeries: drawdownSeries,
+    maxDrawdown: maxDrawdown,
+    maxDrawdownDuration: maxDrawdownDuration,
+    calmar: calmar,
+    hitRate: hitRate,
+    profitFactor: profitFactor,
+    turnover: turnover,
+    deflatedSharpe: deflatedSharpe,
+    normPPF: normPPF,
+    bootstrapSharpeCI: bootstrapSharpeCI,
+    mulberry32: mulberry32,
+    RNG: RNG
+  }
+};
+
+root.JQ = JQ;
+if (typeof module !== "undefined" && module.exports) module.exports = JQ;
+
+})(typeof window !== "undefined" ? window
+   : (typeof globalThis !== "undefined" ? globalThis
+   : (typeof global !== "undefined" ? global : this)));
+</script>
+</head>
+<body>
+<style>
+:root{
+  --ground:#0E141C; --panel:#131C27; --grid:#1E2A39; --well:#0F1721;
+  --vellum:#C9D8E5; --chalk:#74899E; --signal:#45D6BE; --doubt:#E5A63C; --fault:#E2685F;
+  --disp:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  color:var(--vellum);
+  background-color:var(--ground);
+  background-image:
+    linear-gradient(to right,var(--grid) 1px,transparent 1px),
+    linear-gradient(to bottom,var(--grid) 1px,transparent 1px);
+  background-size:46px 46px;
+  background-position:-1px -1px;
+  font-family:var(--disp);
+  font-size:15px;
+  line-height:1.45;
+}
+.jq-mono{font-family:var(--mono)}
+.is-signal{color:var(--signal)}
+.is-doubt{color:var(--doubt)}
+.is-fault{color:var(--fault)}
+.is-chalk{color:var(--chalk)}
+.is-vellum{color:var(--vellum)}
+
+/* ---------------------------------------------------------------- header */
+.jq-top{
+  position:sticky;top:0;z-index:30;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:11px 14px;
+  background:rgba(14,20,28,.94);
+  border-bottom:1px solid var(--grid);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+}
+.jq-brand{font-size:17px;font-weight:600;letter-spacing:-.015em;white-space:nowrap}
+.jq-brand em{font-style:normal;color:var(--signal)}
+.jq-chip{
+  font-family:var(--mono);font-size:9.5px;line-height:1.2;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--chalk);background:var(--well);border:1px solid var(--grid);border-radius:3px;
+  padding:6px 7px;text-align:right;
+}
+
+/* ----------------------------------------------------------------- shell */
+.jq-wrap{
+  max-width:1200px;margin:0 auto;padding:14px 14px 34px;
+  display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-items:start;
+}
+.jq-rail,.jq-results{min-width:0}
+.jq-results{display:flex;flex-direction:column;gap:14px;scroll-margin-top:64px}
+
+/* ------------------------------------------------------------ rail/details */
+.jq-rail{background:var(--panel);border:1px solid var(--grid);border-radius:3px}
+.jq-rail>summary{
+  list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  min-height:52px;padding:0 14px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--vellum);
+}
+.jq-rail>summary::-webkit-details-marker{display:none}
+.jq-rail>summary::marker{content:""}
+.jq-rail>summary:focus-visible{outline:1px solid var(--signal);outline-offset:-2px}
+.jq-sum-s{display:flex;align-items:center;gap:8px;color:var(--chalk);font-size:10px;letter-spacing:.1em}
+.jq-caret{display:inline-block;transition:transform .18s ease}
+.jq-rail[open] .jq-caret{transform:rotate(90deg)}
+.jq-rail-in{padding:0 14px 14px;border-top:1px solid var(--grid);display:flex;flex-direction:column;gap:16px}
+.jq-blk{display:flex;flex-direction:column;gap:9px}
+.jq-blk-h{
+  margin:14px 0 0;font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--chalk);font-weight:400;
+}
+.jq-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.jq-span{grid-column:1/-1}
+
+/* ------------------------------------------------------------ controls */
+.jq-strats{display:flex;flex-direction:column;gap:8px}
+.jq-strat{display:block;position:relative;cursor:pointer;border:1px solid var(--grid);border-radius:3px;background:var(--well)}
+.jq-radio{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.jq-strat-b{display:block;padding:11px 12px 12px 30px;min-height:44px}
+.jq-strat-b::before{
+  content:"";position:absolute;left:11px;top:15px;width:11px;height:11px;border-radius:50%;
+  border:1px solid var(--chalk);background:transparent;
+}
+.jq-radio:checked+.jq-strat-b::before{border-color:var(--signal);box-shadow:inset 0 0 0 2.5px var(--signal)}
+.jq-radio:checked+.jq-strat-b{background:rgba(69,214,190,.055)}
+.jq-strat:has(.jq-radio:checked){border-color:rgba(69,214,190,.45)}
+.jq-radio:focus-visible+.jq-strat-b{outline:1px solid var(--signal);outline-offset:-1px}
+.jq-strat-l{display:block;font-size:14px;font-weight:600;letter-spacing:-.01em}
+.jq-strat-h{display:block;margin-top:4px;font-size:11.5px;line-height:1.4;color:var(--chalk);overflow-wrap:break-word}
+
+.jq-f{display:flex;flex-direction:column;gap:5px;min-width:0}
+.jq-f-k{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--chalk);
+  display:flex;justify-content:space-between;gap:6px;
+}
+.jq-f-k i{font-style:normal;color:#4D6076;letter-spacing:.06em}
+.jq-in{
+  width:100%;min-height:44px;padding:0 10px;
+  font-family:var(--mono);font-size:16px;color:var(--vellum);
+  background:var(--well);border:1px solid var(--grid);border-radius:3px;
+}
+.jq-in:focus{outline:none;border-color:var(--signal);box-shadow:0 0 0 1px rgba(69,214,190,.35)}
+.jq-f-bool{
+  flex-direction:row;align-items:center;justify-content:space-between;gap:10px;
+  min-height:46px;padding:0 10px;background:var(--well);border:1px solid var(--grid);border-radius:3px;cursor:pointer;
+}
+.jq-chk{
+  -webkit-appearance:none;appearance:none;margin:0;flex:0 0 auto;
+  width:50px;height:28px;border:1px solid var(--grid);border-radius:3px;background:var(--ground);
+  position:relative;cursor:pointer;
+}
+.jq-chk::after{
+  content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:2px;background:var(--chalk);
+  transition:transform .16s ease,background .16s ease;
+}
+.jq-chk:checked{border-color:rgba(69,214,190,.5);background:rgba(69,214,190,.1)}
+.jq-chk:checked::after{transform:translateX(22px);background:var(--signal)}
+.jq-chk:focus-visible{outline:1px solid var(--signal);outline-offset:2px}
+
+.jq-runrow{display:flex;flex-direction:column;gap:8px;margin-top:2px}
+.jq-run{
+  width:100%;min-height:52px;cursor:pointer;
+  font-family:var(--mono);font-size:12.5px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;
+  color:#06120F;background:var(--signal);border:1px solid var(--signal);border-radius:3px;
+}
+.jq-run:active{transform:translateY(1px)}
+.jq-run:focus-visible{outline:2px solid var(--vellum);outline-offset:2px}
+.jq-run[disabled]{opacity:.55;cursor:default}
+.jq-stale{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--doubt);
+  display:flex;align-items:center;gap:7px;
+}
+.jq-stale::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--doubt);flex:0 0 auto}
+.jq-stale[hidden]{display:none}
+
+/* ---------------------------------------------------------------- cards */
+.jq-sec{background:var(--panel);border:1px solid var(--grid);border-radius:3px;overflow:hidden}
+.jq-sec-h{padding:13px 14px 0}
+.jq-sec-t{
+  margin:0;display:flex;align-items:baseline;gap:9px;
+  font-family:var(--mono);font-size:12px;font-weight:500;letter-spacing:.17em;text-transform:uppercase;color:var(--vellum);
+}
+.jq-sec-n{color:var(--signal);font-size:11px;letter-spacing:.1em}
+.jq-sec-sub{
+  margin:6px 0 0;font-family:var(--mono);font-size:9.5px;line-height:1.5;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--chalk);overflow-wrap:break-word;
+}
+.jq-sec-b{padding:14px}
+.jq-sec-b.is-flush{padding:14px 0 0}
+.jq-note{margin:0;font-family:var(--mono);font-size:10.5px;line-height:1.6;letter-spacing:.05em;color:var(--chalk)}
+
+/* -------------------------------------------------------------- verdict */
+.jq-verdict{margin:0;font-size:27px;line-height:1.08;font-weight:600;letter-spacing:-.025em}
+.jq-say{margin:9px 0 0;font-size:13.5px;line-height:1.5;color:var(--chalk);max-width:62ch}
+.jq-say b{color:var(--vellum);font-weight:500;font-family:var(--mono);font-size:12.5px}
+
+/* --------------------------------------------------- interval bar (hero) */
+.jq-ival{margin-top:18px}
+.jq-ival-cap{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--chalk);
+  display:flex;justify-content:space-between;gap:8px;margin-bottom:7px;
+}
+.jq-ival-track{
+  position:relative;height:56px;background:var(--well);border:1px solid var(--grid);border-radius:3px;overflow:hidden;
+}
+.jq-ival-range{position:absolute;top:0;bottom:0;border-left:1px solid;border-right:1px solid}
+.jq-ival-range.v-signal{background:rgba(69,214,190,.16);border-color:rgba(69,214,190,.55)}
+.jq-ival-range.v-doubt{background:rgba(229,166,60,.15);border-color:rgba(229,166,60,.55)}
+.jq-ival-range.v-fault{background:rgba(226,104,95,.15);border-color:rgba(226,104,95,.55)}
+.jq-ival-zero{position:absolute;top:0;bottom:0;width:1px;background:var(--chalk);opacity:.85}
+.jq-ival-zt{
+  position:absolute;top:4px;transform:translateX(-50%);
+  font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--vellum);opacity:.8;
+  background:rgba(15,23,33,.75);padding:0 3px;border-radius:2px;
+}
+.jq-ival-tick{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px}
+.jq-ival-tick.v-signal{background:var(--signal)}
+.jq-ival-tick.v-doubt{background:var(--doubt)}
+.jq-ival-tick.v-fault{background:var(--fault)}
+.jq-ival-labels{display:flex;justify-content:space-between;gap:8px;margin-top:8px}
+.jq-ival-labels div{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--chalk)}
+.jq-ival-labels div:nth-child(2){text-align:center}
+.jq-ival-labels div:nth-child(3){text-align:right}
+.jq-ival-labels b{display:block;margin-top:3px;font-size:14px;font-weight:400;letter-spacing:0;color:var(--vellum)}
+
+/* -------------------------------------------------------------- haircut */
+.jq-hair{
+  margin-top:18px;display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:stretch;gap:6px;
+  border-top:1px solid var(--grid);padding-top:14px;
+}
+.jq-hair-c{background:var(--well);border:1px solid var(--grid);border-radius:3px;padding:9px 8px;min-width:0}
+.jq-hair-k{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--chalk);display:block}
+.jq-hair-v{font-family:var(--mono);font-size:17px;display:block;margin-top:5px;letter-spacing:-.02em}
+.jq-hair-a{align-self:center;font-family:var(--mono);font-size:12px;color:var(--chalk)}
+
+/* ---------------------------------------------------------------- stats */
+.jq-stats{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;
+  background:var(--grid);border-top:1px solid var(--grid);
+}
+.jq-stat{background:var(--panel);padding:12px 14px;min-width:0}
+.jq-stat-k{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--chalk)}
+.jq-stat-v{font-family:var(--mono);font-size:21px;letter-spacing:-.025em;margin-top:5px;overflow-wrap:break-word}
+.jq-stat-n{font-family:var(--mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:#4D6076;margin-top:3px}
+
+/* ---------------------------------------------------------------- folds */
+.jq-folds{display:flex;flex-direction:column;gap:7px}
+.jq-fold{display:flex;align-items:center;gap:9px}
+.jq-fold-k{
+  flex:0 0 38px;font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--chalk);text-transform:uppercase;
+}
+.jq-fold-k i{display:block;font-style:normal;font-size:8.5px;color:#41556A;letter-spacing:.02em}
+.jq-fold-t{position:relative;flex:1 1 auto;height:26px;background:var(--well);border:1px solid var(--grid);border-radius:2px;min-width:0}
+.jq-fold-c{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--chalk);opacity:.55}
+.jq-fold-b{position:absolute;top:6px;bottom:6px;border-radius:1px;transition:width .35s ease,left .35s ease}
+.jq-fold-b.pos{background:var(--signal)}
+.jq-fold-b.neg{background:var(--fault)}
+.jq-fold-v{flex:0 0 56px;text-align:right;font-family:var(--mono);font-size:12.5px}
+.jq-wfsum{
+  margin-top:13px;padding-top:12px;border-top:1px solid var(--grid);
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--vellum);
+}
+
+/* ---------------------------------------------------------------- curve */
+.jq-plot{position:relative;border:1px solid var(--grid);border-radius:3px;background:var(--well);overflow:hidden}
+.jq-svg{display:block;width:100%;height:196px}
+.jq-svg line,.jq-svg polyline{fill:none;vector-effect:non-scaling-stroke}
+.jq-base{stroke:var(--chalk);stroke-width:1;stroke-dasharray:4 5;opacity:.6}
+.jq-hwm{stroke:var(--chalk);stroke-width:1;opacity:.34}
+.jq-eq{stroke-width:1.7;stroke-linejoin:round;stroke-linecap:round}
+.jq-eq.pos{stroke:var(--signal)}
+.jq-eq.neg{stroke:var(--fault)}
+.jq-ax{
+  position:absolute;left:7px;font-family:var(--mono);font-size:9px;letter-spacing:.08em;color:#4D6076;
+  background:rgba(15,23,33,.8);padding:1px 3px;
+}
+.jq-ax-t{top:5px}
+.jq-ax-b{bottom:5px}
+.jq-lgd{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:11px}
+.jq-lg{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--chalk)}
+.jq-sw{width:16px;height:0;border-top-width:2px;border-top-style:solid;flex:0 0 auto}
+.jq-sw.eqpos{border-color:var(--signal)}
+.jq-sw.eqneg{border-color:var(--fault)}
+.jq-sw.hwm{border-top-width:1px;border-color:var(--chalk);opacity:.6}
+.jq-sw.base{border-top-width:1px;border-top-style:dashed;border-color:var(--chalk);opacity:.7}
+.jq-cap{
+  display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 14px;margin-top:11px;
+  padding-top:11px;border-top:1px solid var(--grid);
+  font-family:var(--mono);font-size:10px;letter-spacing:.07em;color:var(--chalk);
+}
+.jq-cap b{font-weight:400;color:var(--vellum)}
+
+/* ---------------------------------------------------------------- footer */
+.jq-foot{
+  max-width:1200px;margin:0 auto;padding:0 14px 34px;
+  font-family:var(--mono);font-size:9.5px;line-height:1.7;letter-spacing:.09em;text-transform:uppercase;color:#4D6076;
+}
+.jq-foot span{color:var(--chalk)}
+
+/* ------------------------------------------------------------- desktop */
+@media (min-width:900px){
+  .jq-top{padding:13px 20px}
+  .jq-brand{font-size:19px}
+  .jq-chip{font-size:10px}
+  .jq-wrap{grid-template-columns:334px minmax(0,1fr);gap:18px;padding:18px 18px 46px}
+  .jq-rail{position:sticky;top:66px;max-height:calc(100vh - 84px);overflow-y:auto}
+  .jq-results{gap:18px}
+  .jq-verdict{font-size:36px}
+  .jq-say{font-size:14px}
+  .jq-svg{height:262px}
+  .jq-sec-b{padding:16px}
+  .jq-sec-b.is-flush{padding:16px 0 0}
+  .jq-foot{padding:0 18px 40px}
+}
+@media (min-width:640px){
+  .jq-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .jq-hair-v{font-size:19px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}
+}
+</style>
+
+<header class="jq-top">
+  <div class="jq-brand">Hey <em>Jamie</em></div>
+  <span class="jq-chip">paper only · runs in your browser</span>
+</header>
+
+<main class="jq-wrap">
+  <details class="jq-rail" id="jq-rail">
+    <summary class="jq-sum">
+      <span>Controls</span>
+      <span class="jq-sum-s"><span id="jq-sum-s">Open</span><span class="jq-caret" aria-hidden="true">&#9656;</span></span>
+    </summary>
+    <div class="jq-rail-in">
+
+      <div class="jq-blk">
+        <h2 class="jq-blk-h">Strategy</h2>
+        <div class="jq-strats" id="jq-strats" role="radiogroup" aria-label="Strategy"></div>
+      </div>
+
+      <div class="jq-blk">
+        <h2 class="jq-blk-h">Parameters</h2>
+        <div class="jq-fields" id="jq-params"></div>
+      </div>
+
+      <div class="jq-blk">
+        <h2 class="jq-blk-h">Data</h2>
+        <div class="jq-fields">
+          <label class="jq-f"><span class="jq-f-k">Bars <i>120&ndash;20000</i></span>
+            <input class="jq-in" id="jq-n" type="number" inputmode="numeric" value="2520" min="120" max="20000" step="10"></label>
+          <label class="jq-f"><span class="jq-f-k">Seed <i>int</i></span>
+            <input class="jq-in" id="jq-seed" type="number" inputmode="numeric" value="42" min="0" max="999999" step="1"></label>
+          <label class="jq-f"><span class="jq-f-k">Drift mu <i>%/yr</i></span>
+            <input class="jq-in" id="jq-mu" type="number" inputmode="decimal" value="7" min="-60" max="60" step="0.5"></label>
+          <label class="jq-f"><span class="jq-f-k">Vol sigma <i>%/yr</i></span>
+            <input class="jq-in" id="jq-sigma" type="number" inputmode="decimal" value="20" min="1" max="200" step="0.5"></label>
+          <label class="jq-f jq-f-bool jq-span"><span class="jq-f-k">Fat tails</span>
+            <input class="jq-chk" id="jq-fat" type="checkbox"></label>
+          <label class="jq-f jq-f-bool jq-span"><span class="jq-f-k">Vol clustering</span>
+            <input class="jq-chk" id="jq-vc" type="checkbox"></label>
+        </div>
+      </div>
+
+      <div class="jq-blk">
+        <h2 class="jq-blk-h">Honesty</h2>
+        <div class="jq-fields">
+          <label class="jq-f"><span class="jq-f-k">Trials <i>haircut</i></span>
+            <input class="jq-in" id="jq-trials" type="number" inputmode="numeric" value="20" min="1" max="5000" step="1"></label>
+          <label class="jq-f"><span class="jq-f-k">Folds <i>walk-fwd</i></span>
+            <input class="jq-in" id="jq-folds" type="number" inputmode="numeric" value="6" min="2" max="20" step="1"></label>
+        </div>
+      </div>
+
+      <div class="jq-runrow">
+        <span class="jq-stale" id="jq-stale" hidden>Settings changed &mdash; not run yet</span>
+        <button class="jq-run" id="jq-run" type="button">Run</button>
+      </div>
+    </div>
+  </details>
+
+  <div class="jq-results" id="jq-results" aria-live="polite" aria-busy="false">
+
+    <section class="jq-sec">
+      <div class="jq-sec-h">
+        <h2 class="jq-sec-t"><span class="jq-sec-n">01</span>Is it real?</h2>
+        <p class="jq-sec-sub">Net Sharpe against its 95% bootstrap interval, then the multiple-testing haircut</p>
+      </div>
+      <div class="jq-sec-b" id="jq-real"></div>
+    </section>
+
+    <section class="jq-sec">
+      <div class="jq-sec-h">
+        <h2 class="jq-sec-t"><span class="jq-sec-n">02</span>What did it cost?</h2>
+        <p class="jq-sec-sub" id="jq-costsub">Frictions applied every turn</p>
+      </div>
+      <div class="jq-sec-b is-flush" id="jq-cost"></div>
+    </section>
+
+    <section class="jq-sec">
+      <div class="jq-sec-h">
+        <h2 class="jq-sec-t"><span class="jq-sec-n">03</span>Would it survive?</h2>
+        <p class="jq-sec-sub">Sharpe measured inside each contiguous walk-forward fold, on its own</p>
+      </div>
+      <div class="jq-sec-b" id="jq-wf"></div>
+    </section>
+
+    <section class="jq-sec">
+      <div class="jq-sec-h">
+        <h2 class="jq-sec-t"><span class="jq-sec-n">04</span>What is it doing?</h2>
+        <p class="jq-sec-sub">Net equity per unit of opening capital, with its high-water mark</p>
+      </div>
+      <div class="jq-sec-b" id="jq-curve"></div>
+    </section>
+
+  </div>
+</main>
+
+<footer class="jq-foot">
+  Live routing is blocked in this build &mdash; there is no broker, no order path and no key.
+  <span>Prices are synthetic, every number is computed in this tab, and nothing leaves the device.</span>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var JQ = window.JQ;
+  var MINUS = "−";
+  var DASH = "—";
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function fin(v) { return typeof v === "number" && v === v && v !== Infinity && v !== -Infinity; }
+  function nf(v, d) {
+    if (!fin(v)) return DASH;
+    return (v < 0 ? MINUS : "") + Math.abs(v).toFixed(d);
+  }
+  function pf(v, d) { return fin(v) ? nf(v * 100, d) + "%" : DASH; }
+  function sgn(v) { return !fin(v) ? "is-chalk" : (v < 0 ? "is-fault" : (v > 0 ? "is-signal" : "is-chalk")); }
+  function numOf(el, def, lo, hi, round) {
+    var v = el ? parseFloat(el.value) : NaN;
+    if (!fin(v)) v = def;
+    if (fin(lo) && v < lo) v = lo;
+    if (fin(hi) && v > hi) v = hi;
+    return round ? Math.round(v) : v;
+  }
+  function reduced() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+  function wide() {
+    return !!(window.matchMedia && window.matchMedia("(min-width: 900px)").matches);
+  }
+
+  var rail = $("jq-rail"), results = $("jq-results"), stale = $("jq-stale");
+  var keys = [], pstate = {}, busy = false, pinned = false;
+
+  /* ------------------------------------------------------------ controls */
+
+  function buildStrategies() {
+    var S = JQ.STRATEGIES, html = [], k, st, i;
+    for (k in S) { if (Object.prototype.hasOwnProperty.call(S, k)) keys.push(k); }
+    for (i = 0; i < keys.length; i++) {
+      st = S[keys[i]];
+      html.push(
+        '<label class="jq-strat"><input class="jq-radio" type="radio" name="jq-strat" value="' +
+        esc(keys[i]) + '"' + (i === 0 ? ' checked' : '') + '>' +
+        '<span class="jq-strat-b"><span class="jq-strat-l">' + esc(st.label || keys[i]) + '</span>' +
+        '<span class="jq-strat-h">' + esc(st.hypothesis || "") + '</span></span></label>'
+      );
+    }
+    $("jq-strats").innerHTML = html.join("");
+  }
+
+  function selectedKey() {
+    var r = $("jq-strats").getElementsByTagName("input"), i;
+    for (i = 0; i < r.length; i++) { if (r[i].checked) return r[i].value; }
+    return keys[0];
+  }
+
+  function defsFor(key) {
+    var st = JQ.STRATEGIES[key] || {}, defs = st.params || [], i, o;
+    if (!pstate[key]) {
+      o = {};
+      for (i = 0; i < defs.length; i++) o[defs[i].key] = defs[i].def;
+      pstate[key] = o;
+    }
+    return defs;
+  }
+
+  function renderParams(key) {
+    var defs = defsFor(key), st = pstate[key], html = [], i, p, v, isInt;
+    if (!defs.length) {
+      $("jq-params").innerHTML =
+        '<p class="jq-note jq-span">No parameters &mdash; nothing to tune, nothing to overfit.</p>';
+      return;
+    }
+    for (i = 0; i < defs.length; i++) {
+      p = defs[i];
+      v = st[p.key];
+      if (p.type === "bool") {
+        html.push('<label class="jq-f jq-f-bool jq-span"><span class="jq-f-k">' + esc(p.label) + '</span>' +
+          '<input class="jq-chk jq-p" data-k="' + esc(p.key) + '" data-t="bool" type="checkbox"' +
+          (v ? ' checked' : '') + '></label>');
+      } else {
+        isInt = (p.def === Math.round(p.def));
+        html.push('<label class="jq-f"><span class="jq-f-k">' + esc(p.label) +
+          ' <i>' + esc(p.min) + '&ndash;' + esc(p.max) + '</i></span>' +
+          '<input class="jq-in jq-p" data-k="' + esc(p.key) + '" type="number" inputmode="' +
+          (isInt ? 'numeric' : 'decimal') + '" value="' + esc(v) + '" min="' + esc(p.min) +
+          '" max="' + esc(p.max) + '" step="' + (isInt ? '1' : 'any') + '"></label>');
+      }
+    }
+    $("jq-params").innerHTML = html.join("");
+  }
+
+  function readParams(key) {
+    var defs = defsFor(key), st = pstate[key];
+    var nodes = $("jq-params").getElementsByTagName("input"), i, el, k, d, j, out = {};
+    for (i = 0; i < nodes.length; i++) {
+      el = nodes[i];
+      k = el.getAttribute("data-k");
+      if (!k) continue;
+      if (el.getAttribute("data-t") === "bool") { st[k] = !!el.checked; continue; }
+      d = null;
+      for (j = 0; j < defs.length; j++) { if (defs[j].key === k) d = defs[j]; }
+      if (!d) continue;
+      st[k] = numOf(el, d.def, d.min, d.max, d.def === Math.round(d.def));
+      el.value = st[k];
+    }
+    for (j = 0; j < defs.length; j++) out[defs[j].key] = st[defs[j].key];
+    return out;
+  }
+
+  function markStale(on) {
+    if (stale) stale.hidden = !on;
+  }
+
+  /* -------------------------------------------------------------- render */
+
+  function renderReal(m, trials) {
+    var pt = m.sharpe, lo = m.ciLo, hi = m.ciHi, se;
+    if (!fin(lo) || !fin(hi)) {
+      se = fin(m.sharpeStderr) ? m.sharpeStderr : 0;
+      lo = fin(pt) ? pt - 1.96 * se : NaN;
+      hi = fin(pt) ? pt + 1.96 * se : NaN;
+    }
+    if (!fin(lo) || !fin(hi) || !fin(pt)) {
+      $("jq-real").innerHTML = '<p class="jq-verdict is-doubt">No edge demonstrated</p>' +
+        '<p class="jq-say">There were not enough usable bars to estimate a Sharpe, let alone an interval around it.</p>';
+      return;
+    }
+
+    var straddles = (lo <= 0 && hi >= 0);
+    var verdict = straddles ? "No edge demonstrated" : "Edge demonstrated";
+    var tone = straddles ? "doubt" : (hi < 0 ? "fault" : "signal");
+
+    var dlo = Math.min(lo, pt, 0), dhi = Math.max(hi, pt, 0);
+    var span = dhi - dlo;
+    if (!(span > 0)) span = 1;
+    var pad = span * 0.2;
+    dlo -= pad; dhi += pad;
+    var W = dhi - dlo;
+    function at(v) { return ((v - dlo) / W) * 100; }
+
+    var say;
+    if (straddles) {
+      say = 'The 95% interval runs from <b>' + nf(lo, 2) + '</b> to <b>' + nf(hi, 2) +
+            '</b> and crosses zero, so a Sharpe of <b>' + nf(pt, 2) + '</b> over <b>' +
+            (fin(m.nObs) ? m.nObs : DASH) + '</b> bars is inside the range luck alone produces.';
+    } else if (hi < 0) {
+      say = 'The whole 95% interval sits below zero (<b>' + nf(lo, 2) + '</b> to <b>' + nf(hi, 2) +
+            '</b>): this rule is reliably losing money, not merely unproven.';
+    } else {
+      say = 'The whole 95% interval sits above zero (<b>' + nf(lo, 2) + '</b> to <b>' + nf(hi, 2) +
+            '</b>) across <b>' + (fin(m.nObs) ? m.nObs : DASH) +
+            '</b> bars, so the edge outlives resampling noise before the search haircut.';
+    }
+
+    var defl = m.deflated;
+    var html =
+      '<p class="jq-verdict is-' + tone + '">' + verdict + '</p>' +
+      '<p class="jq-say">' + say + '</p>' +
+      '<div class="jq-ival">' +
+        '<div class="jq-ival-cap"><span>Sharpe &middot; 95% interval</span><span>Block bootstrap</span></div>' +
+        '<div class="jq-ival-track" role="img" aria-label="Sharpe ' + nf(pt, 2) +
+          ', 95% interval ' + nf(lo, 2) + ' to ' + nf(hi, 2) + '">' +
+          '<div class="jq-ival-range v-' + tone + '" style="left:' + at(lo).toFixed(2) +
+            '%;width:' + Math.max(at(hi) - at(lo), 0.4).toFixed(2) + '%"></div>' +
+          '<div class="jq-ival-zero" style="left:' + at(0).toFixed(2) + '%"></div>' +
+          '<div class="jq-ival-zt" style="left:' + at(0).toFixed(2) + '%">0</div>' +
+          '<div class="jq-ival-tick v-' + tone + '" style="left:' + at(pt).toFixed(2) + '%"></div>' +
+        '</div>' +
+        '<div class="jq-ival-labels">' +
+          '<div>min<b>' + nf(lo, 2) + '</b></div>' +
+          '<div>mid<b>' + nf(pt, 2) + '</b></div>' +
+          '<div>max<b>' + nf(hi, 2) + '</b></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="jq-hair">' +
+        '<div class="jq-hair-c"><span class="jq-hair-k">Raw Sharpe</span>' +
+          '<span class="jq-hair-v ' + sgn(pt) + '">' + nf(pt, 2) + '</span></div>' +
+        '<div class="jq-hair-a" aria-hidden="true">&rarr;</div>' +
+        '<div class="jq-hair-c"><span class="jq-hair-k">After trials</span>' +
+          '<span class="jq-hair-v is-chalk">' + trials + '</span></div>' +
+        '<div class="jq-hair-a" aria-hidden="true">&rarr;</div>' +
+        '<div class="jq-hair-c"><span class="jq-hair-k">Deflated</span>' +
+          '<span class="jq-hair-v ' + sgn(defl) + '">' + nf(defl, 2) + '</span></div>' +
+      '</div>' +
+      '<p class="jq-note" style="margin-top:10px">Deflation subtracts the Sharpe the best of ' + trials +
+        ' random tries would show by luck alone.</p>';
+
+    $("jq-real").innerHTML = html;
+  }
+
+  function renderCost(m) {
+    var hr = m.hitRate;
+    if (fin(hr) && hr > 1) hr = hr / 100;
+    var drag = fin(m.costDrag) ? Math.abs(m.costDrag) : NaN;
+    var dd = fin(m.maxDD) ? -Math.abs(m.maxDD) : NaN;
+    var dur = fin(m.maxDDDuration) ? Math.round(m.maxDDDuration) + " bars underwater" : "peak to trough";
+    var cells = [
+      { k: "Gross CAGR", v: pf(m.cagrGross, 2), c: sgn(m.cagrGross), n: "before frictions" },
+      { k: "Net CAGR", v: pf(m.cagrNet, 2), c: sgn(m.cagrNet), n: "what you keep" },
+      { k: "Cost drag", v: fin(drag) ? MINUS + (drag * 100).toFixed(2) + "%" : DASH,
+        c: fin(drag) && drag > 0 ? "is-fault" : "is-chalk", n: "per year, gross less net" },
+      { k: "Turnover", v: fin(m.turnover) ? nf(m.turnover, 2) + "×" : DASH,
+        c: "is-vellum", n: "position turns / yr" },
+      { k: "Max drawdown", v: pf(dd, 2), c: fin(dd) && dd < 0 ? "is-fault" : "is-chalk", n: dur },
+      { k: "Hit rate", v: pf(hr, 1),
+        c: !fin(hr) ? "is-chalk" : (hr > 0.5 ? "is-signal" : (hr < 0.5 ? "is-fault" : "is-chalk")),
+        n: "bars in profit" }
+    ];
+    var html = ['<div class="jq-stats">'], i;
+    for (i = 0; i < cells.length; i++) {
+      html.push('<div class="jq-stat"><div class="jq-stat-k">' + esc(cells[i].k) + '</div>' +
+        '<div class="jq-stat-v ' + cells[i].c + '">' + cells[i].v + '</div>' +
+        '<div class="jq-stat-n">' + esc(cells[i].n) + '</div></div>');
+    }
+    html.push('</div>');
+    $("jq-cost").innerHTML = html.join("");
+  }
+
+  function renderWF(wf) {
+    var folds = (wf && wf.folds) || [], i, s, mx = 0, pos = 0, cnt = 0, lo = null, hi = null;
+    if (!folds.length) {
+      $("jq-wf").innerHTML = '<p class="jq-note">Walk-forward produced no folds.</p>';
+      return;
+    }
+    for (i = 0; i < folds.length; i++) {
+      s = folds[i].sharpe;
+      if (!fin(s)) continue;
+      cnt++;
+      if (s > 0) pos++;
+      if (Math.abs(s) > mx) mx = Math.abs(s);
+      if (lo === null || s < lo) lo = s;
+      if (hi === null || s > hi) hi = s;
+    }
+    if (!(mx > 0.5)) mx = 0.5;
+
+    var html = ['<div class="jq-folds">'], w, style;
+    for (i = 0; i < folds.length; i++) {
+      s = folds[i].sharpe;
+      w = fin(s) ? Math.min(Math.abs(s) / mx, 1) * 49 : 0;
+      style = (fin(s) && s < 0)
+        ? 'left:' + (50 - w).toFixed(2) + '%;width:' + w.toFixed(2) + '%'
+        : 'left:50%;width:' + w.toFixed(2) + '%';
+      html.push('<div class="jq-fold">' +
+        '<span class="jq-fold-k">F' + (i + 1) + '<i>' + (fin(folds[i].n) ? folds[i].n : "") + '</i></span>' +
+        '<div class="jq-fold-t"><span class="jq-fold-c"></span>' +
+        '<span class="jq-fold-b ' + (fin(s) && s < 0 ? "neg" : "pos") + '" style="' + style + '"></span></div>' +
+        '<span class="jq-fold-v ' + sgn(s) + '">' + nf(s, 2) + '</span></div>');
+    }
+    html.push('</div>');
+
+    var frac = cnt ? pos / cnt : NaN;
+    var spread = fin(wf.spread) ? wf.spread : ((lo !== null && hi !== null) ? hi - lo : NaN);
+    html.push('<p class="jq-wfsum">' + folds.length + ' folds &middot; ' +
+      (fin(frac) ? Math.round(frac * 100) : DASH) + '% positive &middot; spread ' +
+      nf(spread, 2) + ' Sharpe</p>');
+
+    $("jq-wf").innerHTML = html.join("");
+  }
+
+  function renderCurve(res, data) {
+    var eq = res.equity || [], i, idx = [], vals = [];
+    for (i = 0; i < eq.length; i++) {
+      if (fin(eq[i])) { idx.push(i); vals.push(eq[i]); }
+    }
+    if (vals.length < 2) {
+      $("jq-curve").innerHTML = '<p class="jq-note">Not enough finite bars to draw an equity curve.</p>';
+      return;
+    }
+    var last = vals.length - 1, base = 1, lo = vals[0], hi = vals[0];
+    for (i = 1; i < vals.length; i++) {
+      if (vals[i] < lo) lo = vals[i];
+      if (vals[i] > hi) hi = vals[i];
+    }
+    if (base < lo) lo = base;
+    if (base > hi) hi = base;
+    var span = hi - lo;
+    if (!(span > 0)) { span = Math.abs(hi) || 1; lo = hi - span / 2; }
+
+    var W = 1000, H = 300, PT = 16, PB = 16;
+    function X(j) { return (j / last) * W; }
+    function Y(v) { return PT + (1 - (v - lo) / span) * (H - PT - PB); }
+
+    var hw = [], run = vals[0];
+    for (i = 0; i < vals.length; i++) { if (vals[i] > run) run = vals[i]; hw.push(run); }
+
+    var step = Math.ceil(vals.length / 900), pts = [], hpts = [];
+    for (i = 0; i < vals.length; i += step) {
+      pts.push(X(i).toFixed(1) + "," + Y(vals[i]).toFixed(1));
+      hpts.push(X(i).toFixed(1) + "," + Y(hw[i]).toFixed(1));
+    }
+    if ((last % step) !== 0) {
+      pts.push(X(last).toFixed(1) + "," + Y(vals[last]).toFixed(1));
+      hpts.push(X(last).toFixed(1) + "," + Y(hw[last]).toFixed(1));
+    }
+
+    var up = vals[last] >= base;
+    var yb = Y(base).toFixed(1);
+    var d0 = (data.dates && data.dates[idx[0]]) || "";
+    var d1 = (data.dates && data.dates[idx[last]]) || "";
+
+    $("jq-curve").innerHTML =
+      '<div class="jq-plot">' +
+        '<svg class="jq-svg" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" ' +
+          'aria-label="Net equity curve, ' + nf(base, 2) + ' to ' + nf(vals[last], 2) + ' per unit of capital">' +
+          '<line class="jq-base" x1="0" y1="' + yb + '" x2="' + W + '" y2="' + yb + '"></line>' +
+          '<polyline class="jq-hwm" points="' + hpts.join(" ") + '"></polyline>' +
+          '<polyline class="jq-eq ' + (up ? "pos" : "neg") + '" points="' + pts.join(" ") + '"></polyline>' +
+        '</svg>' +
+        '<span class="jq-ax jq-ax-t">' + nf(hi, 2) + '</span>' +
+        '<span class="jq-ax jq-ax-b">' + nf(lo, 2) + '</span>' +
+      '</div>' +
+      '<div class="jq-lgd">' +
+        '<span class="jq-lg"><i class="jq-sw ' + (up ? "eqpos" : "eqneg") + '"></i>Net equity</span>' +
+        '<span class="jq-lg"><i class="jq-sw hwm"></i>High-water mark</span>' +
+        '<span class="jq-lg"><i class="jq-sw base"></i>Opening capital</span>' +
+      '</div>' +
+      '<div class="jq-cap">' +
+        '<span>' + esc(d0) + ' &rarr; ' + esc(d1) + ' &middot; ' + vals.length + ' bars</span>' +
+        '<span><b>' + nf(base, 2) + '</b> &rarr; <b>' + nf(vals[last], 2) + '</b> (' +
+          pf(vals[last] / base - 1, 1) + ')</span>' +
+      '</div>';
+  }
+
+  function fail(msg) {
+    $("jq-real").innerHTML = '<p class="jq-verdict is-fault">Run failed</p>' +
+      '<p class="jq-say">' + esc(msg) + '</p>';
+  }
+
+  /* ----------------------------------------------------------------- run */
+
+  function run() {
+    if (busy) return;
+    busy = true;
+    results.setAttribute("aria-busy", "true");
+    try {
+      var key = selectedKey();
+      var strat = JQ.STRATEGIES[key];
+      var p = readParams(key);
+      var n = numOf($("jq-n"), 2520, 120, 20000, true);
+      var mu = numOf($("jq-mu"), 7, -60, 60, false) / 100;
+      var sigma = numOf($("jq-sigma"), 20, 1, 200, false) / 100;
+      var seed = numOf($("jq-seed"), 42, 0, 999999, true);
+      var trials = numOf($("jq-trials"), 20, 1, 5000, true);
+      var folds = numOf($("jq-folds"), 6, 2, 20, true);
+
+      var data = JQ.synth({
+        n: n, mu: mu, sigma: sigma, seed: seed,
+        fatTails: $("jq-fat").checked, volClustering: $("jq-vc").checked,
+        start: "2015-01-02"
+      });
+      var sig = strat.signal(data.prices, p);
+      var res = JQ.backtest({
+        prices: data.prices, signal: sig, costs: JQ.COSTS,
+        ppy: 252, nTrials: trials, bootstrap: 1000
+      });
+      var wf = JQ.walkForward({
+        prices: data.prices, stratKey: key, params: p,
+        costs: JQ.COSTS, folds: folds, ppy: 252
+      });
+
+      renderReal(res.m, trials);
+      renderCost(res.m);
+      renderWF(wf);
+      renderCurve(res, data);
+      markStale(false);
+    } catch (e) {
+      fail(e && e.message ? e.message : String(e));
+    }
+    results.setAttribute("aria-busy", "false");
+    busy = false;
+  }
+
+  /* --------------------------------------------------------------- wire */
+
+  function init() {
+    if (!JQ || !JQ.STRATEGIES || !JQ.synth) {
+      fail("The engine (window.JQ) did not load, so there is nothing to test.");
+      return;
+    }
+
+    var c = JQ.COSTS || {};
+    $("jq-costsub").innerHTML = "Charged every turn: " + (c.spreadBps || 0) + " bps spread &middot; " +
+      (c.commissionBps || 0) + " bps commission &middot; " + (c.slippageBps || 0) +
+      " bps slippage &middot; " + (c.borrowBpsAnn || 0) + " bps/yr borrow on shorts";
+
+    buildStrategies();
+    renderParams(selectedKey());
+
+    $("jq-strats").addEventListener("change", function (e) {
+      var t = e.target;
+      if (t && t.name === "jq-strat") { renderParams(t.value); markStale(true); }
+    }, false);
+
+    rail.addEventListener("change", function (e) {
+      var t = e.target;
+      if (t && t.name !== "jq-strat" && (t.tagName === "INPUT" || t.tagName === "SELECT")) markStale(true);
+    }, false);
+    rail.addEventListener("input", function (e) {
+      var t = e.target;
+      if (t && t.tagName === "INPUT" && t.type === "number") markStale(true);
+    }, false);
+
+    rail.addEventListener("toggle", function () {
+      $("jq-sum-s").innerHTML = rail.open ? "Close" : "Open";
+    }, false);
+
+    /* the rail is a plain <details>: closed on phones so results come first,
+       held open on desktop where it is a left rail. A hand on the summary wins
+       from then on. */
+    var summary = rail.getElementsByTagName("summary")[0];
+    if (summary) { summary.addEventListener("click", function () { pinned = true; }, false); }
+
+    function syncRail() {
+      if (pinned) return;
+      var w = wide();
+      if (rail.open !== w) rail.open = w;
+      $("jq-sum-s").innerHTML = rail.open ? "Close" : "Open";
+    }
+    var mq = window.matchMedia ? window.matchMedia("(min-width: 900px)") : null;
+    if (mq) {
+      if (mq.addEventListener) { mq.addEventListener("change", syncRail); }
+      else if (mq.addListener) { mq.addListener(syncRail); }
+    }
+    window.addEventListener("load", syncRail, false);
+    window.addEventListener("resize", syncRail, false);
+
+    $("jq-run").addEventListener("click", function () {
+      run();
+      if (!wide() && rail.open) {
+        rail.open = false;
+        if (results.scrollIntoView) {
+          try { results.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "start" }); }
+          catch (err) { results.scrollIntoView(); }
+        }
+      }
+    }, false);
+
+    syncRail();
+    run();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init, false);
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
+</html>
