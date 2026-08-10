@@ -768,5 +768,47 @@ footer{border-top:1px solid var(--grid);padding:44px 0 40px}
   setupNav();
 })();
 </script>
+<script>
+/* The secret way in.
+ *
+ * Two triggers, no visible control:
+ *   • type  jamie   anywhere on the page (desktop)
+ *   • tap the footer wordmark 3 times     (touch)
+ *
+ * There is nothing sensitive here. This is a shortcut, not a lock: the desk
+ * lives on the company tailnet and is unreachable from the public internet, so
+ * knowing the address buys an outsider nothing. The obscurity is for tidiness.
+ */
+(function () {
+  "use strict";
+  var DESK = "https://valor-desk.tail53cfa4.ts.net";
+  var WORD = "jamie";
+  var buf = "";
+
+  function open_() { window.location.href = DESK; }
+
+  document.addEventListener("keydown", function (e) {
+    var t = e.target || {};
+    var tag = (t.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || t.isContentEditable) return;
+    if (e.key && e.key.length === 1) {
+      buf = (buf + e.key.toLowerCase()).slice(-WORD.length);
+      if (buf === WORD) { buf = ""; open_(); }
+    }
+  });
+
+  var taps = 0, timer = null;
+  var mark = document.querySelector("footer .mark");
+  if (mark) {
+    mark.style.cursor = "default";
+    mark.addEventListener("click", function () {
+      taps++;
+      clearTimeout(timer);
+      timer = setTimeout(function () { taps = 0; }, 900);
+      if (taps >= 3) { taps = 0; open_(); }
+    });
+  }
+})();
+</script>
 </body>
 </html>
