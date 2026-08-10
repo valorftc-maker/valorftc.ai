@@ -68,7 +68,7 @@ h1{font-weight:700;font-size:clamp(1.7rem,4vw,2.3rem);line-height:1.08;letter-sp
     <div class="eyebrow">Internal · employee access</div>
 
     <h1>Sign in to the research desk.</h1>
-    <p class="lead">The desk is not on the public internet. Connect to the company network first, then sign in with your own account and authenticator.</p>
+    <p class="lead">The desk is not on the public internet — it lives on the company's private Tailscale network. Connect to Tailscale first, then sign in with your own account and authenticator.</p>
 
     <div class="card">
       <div class="k">Open the desk</div>
@@ -77,20 +77,21 @@ h1{font-weight:700;font-size:clamp(1.7rem,4vw,2.3rem);line-height:1.08;letter-sp
     </div>
 
     <div class="note">
-      <span>If the page does not load, you are not on the network. Open your VPN client, confirm it says connected, then try again — the desk is invisible from outside it, by design.</span>
+      <span>If that link does not load, you are not on the tailnet. Open Tailscale, confirm it says <b>Connected</b>, then try again. The desk is invisible from outside it — that is deliberate, and it is the first of the three things standing between a stranger and this system.</span>
     </div>
 
     <div class="card">
       <div class="k">First time?</div>
       <ol class="steps">
-        <li>Ask an admin to create your account — you'll set your own <b>password</b> on the spot, and it is never sent by email.</li>
-        <li>Add the <b>authenticator secret</b> to 1Password, Authy, or Google Authenticator, and store your <b>recovery codes</b> somewhere safe. They are shown once.</li>
-        <li>Connect to the <b>VPN</b>, then open the desk and sign in with your username, password, and the six-digit code.</li>
+        <li>Ask an admin for a <b>Tailscale invite</b>, install it, and sign in. Your device has to be on the tailnet before the desk is reachable at all.</li>
+        <li>Ask an admin to create your desk account — you set your own <b>password</b> at the terminal, and it is never emailed, never written down, and never recoverable by anyone.</li>
+        <li>Add the <b>authenticator secret</b> to 1Password, Authy, or Google Authenticator, and keep your <b>recovery codes</b> somewhere safe. They are shown once and cannot be re-issued.</li>
+        <li>Open the desk and sign in with your username, password, and the six-digit code.</li>
       </ol>
     </div>
 
     <p class="fine">
-      Five wrong attempts lock an account for fifteen minutes. Sessions end after 1 hour idle or 12 hours absolute. Every sign-in, failure, and permission denial is written to an append-only audit log.
+      Three independent layers guard this desk: the tailnet (a stranger cannot route to it), your password (stored only as a memory-hard verifier), and your authenticator. Five wrong attempts lock an account for fifteen minutes. Sessions end after 1 hour idle or 12 hours absolute. Every sign-in, failure, and permission denial is written to an append-only audit log.
       Access to the desk grants research and paper-trading only — live routing remains blocked in code, for everyone, regardless of role.
     </p>
 
