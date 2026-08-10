@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- The server substitutes this literal placeholder at serve time. Every /api/*
+     call carries it, so no other page in the browser can drive this desk. -->
+<meta name="heyjamie-token" content="">
+<meta name="color-scheme" content="dark">
+<title>Hey Jamie — desk</title>
+<!-- The server may mount the static dir at /static/ or at /. Ask for the usual
+     place first and only reach for the other if that request actually fails. -->
+<link rel="stylesheet" href="app.css"
+      onerror="var l=document.createElement('link');l.rel='stylesheet';l.href='/app.css';document.head.appendChild(l);">
+</head>
+<body>
+
+<a class="skip" href="#work">Skip to the actions</a>
+
+<header class="bar">
+  <div class="mark">Hey <span>Jamie</span></div>
+  <div class="chips">
+    <span class="chip on" title="Live routing is blocked in code. There is no endpoint here that could route an order.">paper only</span>
+    <span class="chip" id="chip-holdout" title="The out-of-sample data you only get to look at once.">holdout &hellip;</span>
+    <button type="button" class="chip act" id="chip-doctor" aria-expanded="false" aria-controls="doctor-panel"
+            title="Re-run the install and guardrail checks.">doctor &hellip;</button>
+    <span class="chip mute" id="chip-app">&hellip;</span>
+    <button type="button" class="chip quit" id="btn-quit" title="Stop the local server and close the desk.">Quit</button>
+  </div>
+</header>
+
+<div class="banner" id="banner" role="alert" hidden>
+  <span class="banner-x" id="banner-text"></span>
+  <button type="button" class="banner-close" id="banner-close" aria-label="Dismiss this message">dismiss</button>
+</div>
+
+<main class="desk">
+
+  <!-- ------------------------------------------------------------------ -->
+  <aside class="rail" aria-label="Run settings">
+    <form id="rail-form" autocomplete="off">
+
+      <section class="rail-sec">
+        <h3 class="rail-h">Strategy</h3>
+        <div class="pick" id="pick-strategy" role="radiogroup" aria-label="Strategy">
+          <p class="loading">loading the registry&hellip;</p>
+        </div>
+        <div class="hypo" id="hypothesis">
+          <span class="hypo-k">hypothesis</span>
+          <p class="hypo-t" id="hypothesis-text">&mdash;</p>
+        </div>
+      </section>
+
+      <section class="rail-sec">
+        <h3 class="rail-h">Parameters</h3>
+        <div class="fields" id="params"></div>
+      </section>
+
+      <section class="rail-sec">
+        <h3 class="rail-h">Data</h3>
+        <div class="seg" id="seg-source">
+          <input type="radio" name="source" id="src-synthetic" value="synthetic" checked>
+          <label for="src-synthetic">Synthetic</label>
+          <input type="radio" name="source" id="src-symbol" value="symbol">
+          <label for="src-symbol">Ticker</label>
+        </div>
+        <p class="note" id="source-note">Generated offline with a fixed seed. Nothing leaves this machine.</p>
+        <div class="fields">
+          <div class="field" id="f-symbol" hidden>
+            <label for="in-symbol">symbol</label>
+            <input type="text" id="in-symbol" placeholder="SPY" spellcheck="false">
+          </div>
+          <div class="field" id="f-start" hidden>
+            <label for="in-start">start</label>
+            <input type="text" id="in-start" value="2015-01-01" spellcheck="false" inputmode="numeric">
+          </div>
+          <div class="field" id="f-bars">
+            <label for="in-bars">bars</label>
+            <input type="number" id="in-bars" value="2520" min="60" step="10">
+          </div>
+          <div class="field" id="f-seed">
+            <label for="in-seed">seed</label>
+            <input type="number" id="in-seed" value="42" step="1">
+          </div>
+          <div class="field">
+            <label for="in-asset">asset class</label>
+            <select id="in-asset"></select>
+          </div>
+        </div>
+        <p class="note" id="cost-note">&nbsp;</p>
+      </section>
+
+      <section class="rail-sec">
+        <h3 class="rail-h">Run settings</h3>
+        <div class="fields">
+          <div class="field">
+            <label for="in-trials">trials <em>backtest</em></label>
+            <input type="number" id="in-trials" value="1" min="1" step="1">
+          </div>
+          <div class="field">
+            <label for="in-train">train <em>walk-forward</em></label>
+            <input type="number" id="in-train" value="504" min="20" step="1">
+          </div>
+          <div class="field">
+            <label for="in-test">test <em>walk-forward</em></label>
+            <input type="number" id="in-test" value="126" min="5" step="1">
+          </div>
+          <div class="field">
+            <label for="in-warmup">warmup <em>paper</em></label>
+            <input type="number" id="in-warmup" value="260" min="0" step="1">
+          </div>
+        </div>
+        <p class="note">Every variant you try inflates the Sharpe you find. Count them
+          in <b>trials</b> — the deflation is the honest part.</p>
+      </section>
+
+    </form>
+  </aside>
+
+  <!-- ------------------------------------------------------------------ -->
+  <section class="work" id="work">
+
+    <div class="panel doctor" id="doctor-panel" hidden>
+      <div class="panel-head">
+        <h3>Install and guardrails</h3>
+        <button type="button" class="ghost sm" id="doctor-rerun">re-run</button>
+      </div>
+      <div id="doctor-body"><p class="loading">checking&hellip;</p></div>
+    </div>
+
+    <div class="actions" id="actions">
+      <button type="submit" form="rail-form" class="go primary" id="btn-backtest">
+        Backtest<em>measure it, honestly</em></button>
+      <button type="button" class="go" id="btn-validate">
+        Walk-forward<em>out of sample, fold by fold</em></button>
+      <button type="button" class="go" id="btn-paper">
+        Paper session<em>simulated money, real costs</em></button>
+      <button type="button" class="go ghost" id="btn-all">
+        Run all three<em>in order, back to back</em></button>
+    </div>
+
+    <p class="actions-h">Models <em>five more questions, about the evidence rather than the strategy</em></p>
+
+    <div class="actions" id="model-actions">
+      <button type="button" class="go" id="btn-statarb">
+        Pairs<em>does the spread come back?</em></button>
+      <button type="button" class="go" id="btn-factors">
+        Factors<em>what is it exposed to?</em></button>
+      <button type="button" class="go" id="btn-var">
+        Value at risk<em>what could it lose?</em></button>
+      <button type="button" class="go" id="btn-ml">
+        Machine learning<em>did it learn, or memorise?</em></button>
+      <button type="button" class="go" id="btn-optimize">
+        Optimiser<em>how should it be weighted?</em></button>
+      <button type="button" class="go ghost" id="btn-models">
+        Run all five<em>the analyses, back to back</em></button>
+    </div>
+
+    <div class="panel console">
+      <div class="panel-head">
+        <h3>Console</h3>
+        <span class="con-meta">
+          <span class="con-status" id="con-status">idle</span>
+          <span class="con-prog" id="con-prog" hidden></span>
+          <span class="con-clock" id="con-clock" role="status" aria-label="elapsed">0.0s</span>
+        </span>
+      </div>
+      <div class="con-lines" id="con-lines" role="log" aria-live="polite" aria-relevant="additions">
+        <div class="ln lvl-info"><span class="ln-x">Nothing running. The desk is waiting on you.</span></div>
+      </div>
+    </div>
+
+    <div id="results">
+      <p class="nothing" id="nothing">
+        Nothing measured yet. Pick a strategy and press <b>Backtest</b>.
+        The first honest answer is usually &ldquo;no edge demonstrated&rdquo; —
+        that is the measurement working, not the strategy failing.
+      </p>
+
+      <section class="q" id="q-real" hidden>
+        <div class="q-head"><h2>Is it real?</h2><em>the only question that matters first</em></div>
+        <div class="card" id="c-real"></div>
+      </section>
+
+      <section class="q" id="q-cost" hidden>
+        <div class="q-head"><h2>What did it cost?</h2><em>gross and net always travel together</em></div>
+        <dl class="grid" id="c-cost"></dl>
+      </section>
+
+      <section class="q" id="q-survive" hidden>
+        <div class="q-head"><h2>Would it survive?</h2><em>walk-forward, out of sample</em></div>
+        <div class="card" id="c-survive"></div>
+      </section>
+
+      <section class="q" id="q-now" hidden>
+        <div class="q-head"><h2>What is it doing now?</h2><em>paper session</em></div>
+        <div class="card" id="c-now"></div>
+      </section>
+
+      <!-- The five models. Each panel appears only once its own run has
+           produced data; each keeps a one-line spoken summary that updates in
+           place, so a screen reader hears the finding and not the chart. -->
+      <section class="q" id="q-statarb" hidden aria-labelledby="h-statarb">
+        <div class="q-head"><h2 id="h-statarb">Does it revert?</h2><em>pairs, and whether the spread comes back</em></div>
+        <p class="q-live" id="live-statarb" role="status" aria-live="polite"></p>
+        <div class="card" id="c-statarb"></div>
+      </section>
+
+      <section class="q" id="q-factors" hidden aria-labelledby="h-factors">
+        <div class="q-head"><h2 id="h-factors">What is it exposed to?</h2><em>the cross-section, sorted</em></div>
+        <p class="q-live" id="live-factors" role="status" aria-live="polite"></p>
+        <div class="card" id="c-factors"></div>
+      </section>
+
+      <section class="q" id="q-var" hidden aria-labelledby="h-var">
+        <div class="q-head"><h2 id="h-var">What could it lose?</h2><em>three methods, and whether they agree</em></div>
+        <p class="q-live" id="live-var" role="status" aria-live="polite"></p>
+        <div class="card" id="c-var"></div>
+      </section>
+
+      <section class="q" id="q-ml" hidden aria-labelledby="h-ml">
+        <div class="q-head"><h2 id="h-ml">Did it learn, or memorise?</h2><em>train against test, honestly</em></div>
+        <p class="q-live" id="live-ml" role="status" aria-live="polite"></p>
+        <div class="card" id="c-ml"></div>
+      </section>
+
+      <section class="q" id="q-optimize" hidden aria-labelledby="h-optimize">
+        <div class="q-head"><h2 id="h-optimize">How should it be weighted?</h2><em>the frontier is a band, not a line</em></div>
+        <p class="q-live" id="live-optimize" role="status" aria-live="polite"></p>
+        <div class="card" id="c-optimize"></div>
+      </section>
+
+      <!-- ---------------------------------------------------------------
+           The Opening Tape. One ticker in, every model in the repo run over
+           it, one graded dossier out. The controls live here; the drawing is
+           tape.js's job and nothing below fetches anything — app.js owns the
+           token, the poll and the console for these two kinds exactly as it
+           does for the eight above.
+      ---------------------------------------------------------------- -->
+      <section class="q" id="tape-search" aria-labelledby="h-tape">
+        <div class="q-head">
+          <h2 id="h-tape">One name, every model</h2>
+          <em>nine models over a single ticker, graded on how many intervals cleared zero</em>
+        </div>
+        <div class="fields">
+          <div class="field">
+            <label for="in-ticker">ticker</label>
+            <input type="text" id="in-ticker" placeholder="AAPL" spellcheck="false"
+                   autocomplete="off" autocapitalize="characters"
+                   aria-describedby="tape-suggest" aria-autocomplete="list">
+          </div>
+          <div class="field">
+            <label for="in-tape-years">years <em>of history</em></label>
+            <select id="in-tape-years"></select>
+          </div>
+          <div class="field">
+            <label for="in-tape-insider">insider filings</label>
+            <input type="checkbox" id="in-tape-insider" checked>
+          </div>
+        </div>
+        <div class="tape-suggest" id="tape-suggest" role="status" aria-live="polite"></div>
+        <div class="actions">
+          <button type="button" class="go primary" id="btn-tape">
+            Run the tape<em>nine models, 60&ndash;90 seconds</em></button>
+        </div>
+        <p class="note">A dossier is evidence, not permission. On real single-name daily data
+          the grade is <b>C</b> almost every time &mdash; that is the measurement working.
+          Insider filings come from SEC EDGAR and need the network.</p>
+      </section>
+
+      <div id="panel-score" hidden></div>
+      <div id="panel-dossier" hidden></div>
+      <div id="panel-insider" hidden></div>
+
+      <section class="q" id="screener" aria-labelledby="h-screener">
+        <div class="q-head">
+          <h2 id="h-screener">Which names clear the bar?</h2>
+          <em>ranked against what a screen of this size hands you by luck alone</em>
+        </div>
+        <div class="fields">
+          <div class="field">
+            <label for="in-universe">universe</label>
+            <select id="in-universe"></select>
+          </div>
+          <div class="field">
+            <label for="in-preset">preset</label>
+            <select id="in-preset"></select>
+          </div>
+          <div class="field">
+            <label for="in-screen-top">top <em>rows kept</em></label>
+            <input type="number" id="in-screen-top" value="20" min="1" step="1">
+          </div>
+        </div>
+        <p class="note" id="preset-note">&nbsp;</p>
+        <div class="actions">
+          <button type="button" class="go" id="btn-screen">
+            Screen the universe<em>the window and the thresholds come from the preset</em></button>
+        </div>
+        <div id="panel-screen" hidden></div>
+      </section>
+
+      <!-- ---------------------------------------------------------------
+           The whole book. Every control below is built by app.js from what
+           /api/state publishes under `portfolio` — the allocations, the
+           rebalance policies, the asset classes and the calendars are the
+           server's to name, and not one of those lists is written here. The
+           holdings list is built the same way, from the book you pick. The
+           drawing is portfolio.js's job and nothing here fetches anything.
+      ---------------------------------------------------------------- -->
+      <section class="q" id="portfolio-build" aria-labelledby="h-portfolio-build">
+        <div class="q-head">
+          <h2 id="h-portfolio-build">What should the book hold?</h2>
+          <em>assets you choose, across every class the desk prices</em>
+        </div>
+
+        <div class="fields pf-add">
+          <div class="field">
+            <label for="in-pf-symbol">symbol</label>
+            <input type="text" id="in-pf-symbol" placeholder="SPY" spellcheck="false"
+                   autocomplete="off" autocapitalize="characters">
+          </div>
+          <div class="field">
+            <label for="in-pf-class">asset class <em>chooses the cost model</em></label>
+            <select id="in-pf-class"></select>
+          </div>
+          <button type="button" class="ghost" id="btn-pf-add">Add holding</button>
+        </div>
+
+        <h3 class="rail-h pf-listh" id="h-pf-list">The book</h3>
+        <ul class="pf-list" id="pf-holdings" aria-labelledby="h-pf-list"></ul>
+        <p class="note" id="pf-list-note" role="status" aria-live="polite"></p>
+
+        <div class="fields">
+          <div class="field">
+            <label for="in-pf-alloc">allocation</label>
+            <select id="in-pf-alloc"></select>
+          </div>
+          <div class="field">
+            <label for="in-pf-rebal">rebalance</label>
+            <select id="in-pf-rebal"></select>
+          </div>
+          <div class="field">
+            <label for="in-pf-every">every <em>bars, periodic</em></label>
+            <input type="number" id="in-pf-every" value="21" min="1" step="1">
+          </div>
+          <div class="field">
+            <label for="in-pf-band">drift band <em>weight, drift_band</em></label>
+            <input type="number" id="in-pf-band" value="0.05" min="0.01" max="0.99" step="0.01">
+          </div>
+          <div class="field">
+            <label for="in-pf-start">start</label>
+            <input type="text" id="in-pf-start" value="2022-01-01" spellcheck="false"
+                   inputmode="numeric">
+          </div>
+          <div class="field">
+            <label for="in-pf-cal">calendar <em>how classes are lined up</em></label>
+            <select id="in-pf-cal"></select>
+          </div>
+        </div>
+        <p class="note" id="pf-note">&nbsp;</p>
+
+        <div class="actions">
+          <button type="button" class="go primary" id="btn-portfolio">
+            Run the book<em>every holding, one calendar, one bill</em></button>
+        </div>
+        <p class="note">Mixing asset classes is not free: a bar that only some of your names
+          printed is either dropped or carried forward, and the panel counts both. The run
+          also builds equal weight and buy-and-hold on the identical data, because an
+          allocation that cannot beat those has not earned its complexity.</p>
+      </section>
+
+      <div id="panel-portfolio" role="region" aria-labelledby="h-portfolio" hidden></div>
+    </div>
+
+  </section>
+</main>
+
+<!-- -------------------------------------------------------------------- -->
+<footer class="strip">
+  <section class="strip-col">
+    <h3 class="rail-h">Saved runs</h3>
+    <ul class="runs" id="runs"><li class="loading">loading&hellip;</li></ul>
+    <p class="note">A run is stored per strategy and subject — running the same pair again
+      overwrites it. Click one to read it back.</p>
+  </section>
+  <section class="strip-col">
+    <h3 class="rail-h">Report</h3>
+    <button type="button" class="ghost" id="btn-dashboard">Render dashboard</button>
+    <p class="note" id="dash-note">Writes <code>reports/dashboard.html</code> from every saved
+      run and opens it.</p>
+  </section>
+  <section class="strip-col">
+    <h3 class="rail-h">Gates before real capital</h3>
+    <ul class="gates" id="gates"><li class="loading">loading&hellip;</li></ul>
+  </section>
+</footer>
+
+<p class="fine">
+  Hey Jamie is paper only; live routing is blocked in code until the governance gates in
+  <code>docs/05_RISK_RULES.md</code> are met. Not investment advice. Every figure on this page
+  came from your own run — including, quite possibly, from data with no edge in it.
+</p>
+
+<div class="closed" id="closed" hidden>
+  <div class="closed-in">
+    <div class="mark">Hey <span>Jamie</span></div>
+    <h2>The desk is closed.</h2>
+    <p>The local server has shut down and this page is no longer connected to anything.
+       Nothing was left running. Launch the app again when you want to pick it back up.</p>
+  </div>
+</div>
+
+<!-- Deferred scripts keep their order, so models.js can count on app.js's
+     helpers existing by the time anything calls them. -->
+<script src="nprandom.js" defer></script>
+<script src="engine.js" defer></script>
+<script src="shim.js" defer></script>
+<script src="app.js" defer></script>
+<script src="models.js" defer></script>
+<script src="tape.js" defer></script>
+<script src="portfolio.js" defer></script>
+<!-- Deferred scripts run before DOMContentLoaded, so by the time this fires the
+     tags above have either taken or not. Only then try the other mount points.
+     app.js is recovered first: models.js and tape.js are useless without it, and
+     the desk still answers its first four questions without either. -->
+<script>
+window.addEventListener("DOMContentLoaded", function () {
+  function recover(flag, names, done) {
+    if (window[flag]) { done(); return; }
+    var i = 0;
+    (function next() {
+      if (window[flag] || i >= names.length) { done(); return; }
+      var s = document.createElement("script");
+      s.src = names[i++];
+      s.onerror = next;
+      s.onload = function () { if (!window[flag]) next(); else done(); };
+      document.head.appendChild(s);
+    })();
+  }
+  recover("__HEYJAMIE__", ["/app.js", "app.js"], function () {
+    recover("__HEYJAMIE_MODELS__", ["/models.js", "models.js"], function () {
+      recover("__TAPE__", ["/tape.js", "tape.js"], function () {
+        recover("__PORTFOLIO__", ["/portfolio.js", "portfolio.js"], function () {});
+      });
+    });
+  });
+});
+</script>
+<a href="/" style="position:fixed;left:10px;bottom:10px;z-index:99;font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#74899E;background:rgba(14,20,28,.9);border:1px solid #1E2A39;border-radius:2px;padding:7px 11px;text-decoration:none">&larr; valorftc.ai</a>
+</body>
+</html>

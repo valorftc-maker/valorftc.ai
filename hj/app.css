@@ -1,0 +1,1415 @@
+/* Hey Jamie Desk — the look.
+ *
+ * Lifted wholesale from src/heyjamie/dashboard.py, because the desk and the
+ * report should read as one object. Same palette, same interval bar, same
+ * rule: amber means doubt, and doubt is the default. Dark only — there is no
+ * light theme and there should not be one.
+ *
+ * Fonts are named but never fetched. Offline, the stacks fall back to the
+ * system faces and the page still reads correctly.
+ */
+
+:root {
+  --ground:#0E141C; --panel:#131C27; --grid:#1E2A39;
+  --vellum:#C9D8E5; --chalk:#74899E;
+  --signal:#45D6BE; --doubt:#E5A63C; --fault:#E2685F;
+  --display:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --data:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --well:#0F1721;
+  /* Two extra hues, and only for telling series apart. The three semantic
+     colours mean signal / doubt / fault everywhere else on this page, so using
+     them to label "gaussian" or "max-Sharpe" would make a colour say something
+     the number does not. These two say nothing at all, which is the point. */
+  --hue-blue:#6EA8DC; --hue-violet:#AE8BD8;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+/* Several things below set display:flex, which would otherwise beat the UA
+   rule for [hidden]. The desk toggles panels with that attribute, so it wins. */
+[hidden] { display: none !important; }
+
+html { background: var(--ground); }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--ground);
+  color: var(--vellum);
+  font-family: var(--display);
+  font-size: 14px;
+  line-height: 1.5;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 46px 46px;
+  background-position: -1px -1px;
+  background-attachment: fixed;
+}
+
+h1, h2, h3 { font-weight: 500; margin: 0; }
+p { margin: 0; }
+b { font-weight: 600; }
+code { font-family: var(--data); font-size: .92em; color: var(--signal); }
+
+a { color: var(--signal); }
+
+:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.skip {
+  position: absolute; left: -9999px; top: 0; z-index: 40;
+  background: var(--panel); border: 1px solid var(--signal);
+  padding: 10px 16px; font-family: var(--data); font-size: 12px;
+}
+.skip:focus { left: 12px; top: 12px; }
+
+.loading { font-family: var(--data); font-size: 11.5px; color: var(--chalk); }
+
+
+/* --------------------------------------------------------------- header */
+
+.bar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; flex-wrap: wrap; gap: 14px;
+  align-items: center; justify-content: space-between;
+  padding: 14px 24px;
+  background: rgba(14, 20, 28, .93);
+  border-bottom: 1px solid var(--grid);
+}
+.mark { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+.mark span { color: var(--signal); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chip {
+  font-family: var(--data); font-size: 11px; letter-spacing: .02em;
+  border: 1px solid var(--grid); border-radius: 2px;
+  padding: 4px 10px; color: var(--chalk);
+  background: transparent;
+}
+.chip.on     { color: var(--signal); border-color: rgba(69,214,190,.4); }
+.chip.warn   { color: var(--doubt);  border-color: rgba(229,166,60,.4); }
+.chip.bad    { color: var(--fault);  border-color: rgba(226,104,95,.4); }
+.chip.mute   { opacity: .7; }
+button.chip  { cursor: pointer; font: inherit; font-family: var(--data); font-size: 11px; }
+button.chip:hover { border-color: var(--chalk); color: var(--vellum); }
+button.chip.on:hover  { color: var(--signal); }
+button.chip.bad:hover { color: var(--fault); }
+.chip.quit { color: var(--chalk); }
+.chip.quit:hover { color: var(--fault); border-color: rgba(226,104,95,.5); }
+.chip[aria-expanded="true"] { background: rgba(116,137,158,.12); }
+
+
+/* --------------------------------------------------------------- banner */
+
+.banner {
+  display: flex; gap: 16px; align-items: baseline; justify-content: space-between;
+  margin: 14px 24px 0; padding: 12px 16px;
+  border: 1px solid rgba(226,104,95,.45); border-left: 3px solid var(--fault);
+  background: rgba(226,104,95,.08); border-radius: 3px;
+}
+.banner-x { font-family: var(--data); font-size: 12px; color: var(--vellum); }
+.banner-close {
+  flex: none; background: none; border: none; cursor: pointer;
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+  text-decoration: underline; padding: 0;
+}
+.banner-close:hover { color: var(--vellum); }
+
+
+/* --------------------------------------------------------------- layout */
+
+.desk {
+  display: grid;
+  grid-template-columns: 330px minmax(0, 1fr);
+  gap: 26px;
+  align-items: start;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 26px 24px 40px;
+}
+.work { min-width: 0; display: flex; flex-direction: column; gap: 22px; }
+
+
+/* ----------------------------------------------------------------- rail */
+
+.rail {
+  position: sticky; top: 74px;
+  max-height: calc(100vh - 96px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--grid); border-radius: 3px;
+  padding: 4px 20px 20px;
+}
+.rail-sec { padding: 18px 0; border-bottom: 1px solid var(--grid); }
+.rail-sec:last-child { border-bottom: none; padding-bottom: 4px; }
+.rail-h {
+  font-family: var(--data); font-size: 10.5px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--chalk); margin-bottom: 12px;
+}
+
+/* The radio itself is taken out of the layout but kept in the accessibility
+   tree and the tab order — the label is the visible control. */
+.a11y-hide, .pick input, .seg input {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+.pick { display: flex; flex-direction: column; gap: 1px; }
+.pick label {
+  display: block; cursor: pointer; padding: 9px 12px;
+  border: 1px solid var(--grid); border-radius: 2px; background: var(--well);
+}
+.pick label b { display: block; font-size: 13.5px; font-weight: 500; color: var(--vellum); }
+.pick label small {
+  display: block; font-family: var(--data); font-size: 10.5px;
+  color: var(--chalk); margin-top: 3px; line-height: 1.4;
+}
+.pick label:hover { border-color: var(--chalk); }
+.pick input:checked + label {
+  border-color: rgba(69,214,190,.5); background: rgba(69,214,190,.08);
+}
+.pick input:checked + label b { color: var(--signal); }
+.pick input:focus-visible + label { outline: 2px solid var(--signal); outline-offset: 1px; }
+
+.hypo { margin-top: 14px; padding-left: 12px; border-left: 2px solid var(--grid); }
+.hypo-k {
+  font-family: var(--data); font-size: 10px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--doubt);
+}
+.hypo-t { font-size: 12.5px; line-height: 1.55; color: var(--chalk); margin-top: 5px; }
+
+.fields { display: flex; flex-direction: column; gap: 10px; }
+.field { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.field label {
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+  letter-spacing: .03em; flex: 1 1 auto; min-width: 0;
+}
+.field label em {
+  font-style: normal; display: block; font-size: 9.5px; opacity: .65; letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.field input[type="text"],
+.field input[type="number"],
+.field select {
+  flex: 0 0 118px; width: 118px;
+  background: var(--well); color: var(--vellum);
+  border: 1px solid var(--grid); border-radius: 2px;
+  font-family: var(--data); font-size: 12px; padding: 6px 8px;
+}
+.field select { flex-basis: 130px; width: 130px; }
+.field input:hover, .field select:hover { border-color: var(--chalk); }
+.field input[type="checkbox"] {
+  /* 16 + 102 = the 118px the text inputs occupy, so the column stays straight. */
+  flex: none; width: 16px; height: 16px; accent-color: var(--signal); margin: 0 102px 0 0;
+}
+
+.seg { display: flex; border: 1px solid var(--grid); border-radius: 2px; overflow: hidden; }
+.seg label {
+  flex: 1; text-align: center; cursor: pointer; padding: 7px 6px;
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+}
+.seg label:hover { color: var(--vellum); }
+.seg input:checked + label { background: rgba(69,214,190,.12); color: var(--signal); }
+.seg input:focus-visible + label { outline: 2px solid var(--signal); outline-offset: -2px; }
+
+.note {
+  font-family: var(--data); font-size: 10.5px; line-height: 1.55;
+  color: var(--chalk); margin-top: 10px;
+}
+.note.warn { color: var(--doubt); }
+
+
+/* -------------------------------------------------------------- actions */
+
+.actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.go {
+  text-align: left; cursor: pointer;
+  background: var(--panel); color: var(--vellum);
+  border: 1px solid var(--grid); border-radius: 3px;
+  padding: 13px 16px; font-family: var(--display); font-size: 15px; font-weight: 500;
+  transition: border-color .15s, background .15s;
+}
+.go em {
+  display: block; font-style: normal; font-family: var(--data);
+  font-size: 10.5px; color: var(--chalk); margin-top: 4px; letter-spacing: .02em;
+}
+.go:hover:not(:disabled) { border-color: var(--chalk); }
+.go.primary { border-color: rgba(69,214,190,.45); }
+.go.primary:hover:not(:disabled) { background: rgba(69,214,190,.08); border-color: var(--signal); }
+.go.ghost { background: transparent; border-style: dashed; }
+.go:disabled { opacity: .38; cursor: not-allowed; }
+.ghost {
+  cursor: pointer; background: transparent; color: var(--vellum);
+  border: 1px dashed var(--grid); border-radius: 2px;
+  padding: 8px 14px; font-family: var(--data); font-size: 11.5px;
+}
+.ghost:hover { border-color: var(--chalk); }
+.ghost.sm { padding: 4px 10px; font-size: 10.5px; }
+
+
+/* -------------------------------------------------------- panel/console */
+
+.panel { background: var(--panel); border: 1px solid var(--grid); border-radius: 3px; }
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 11px 16px; border-bottom: 1px solid var(--grid);
+}
+.panel-head h3 {
+  font-family: var(--data); font-size: 10.5px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--chalk);
+}
+.con-meta { display: flex; gap: 14px; align-items: baseline; font-family: var(--data); font-size: 11px; }
+.con-status { color: var(--chalk); }
+.con-status.run { color: var(--signal); }
+.con-status.bad { color: var(--fault); }
+.con-prog { color: var(--chalk); }
+.con-clock { color: var(--vellum); min-width: 52px; text-align: right; }
+
+.con-lines {
+  font-family: var(--data); font-size: 11.5px; line-height: 1.65;
+  height: 214px; overflow: auto; padding: 10px 16px; background: var(--well);
+}
+.ln { display: flex; gap: 12px; padding: 1px 0; }
+.ln-t { flex: none; color: #46596B; }
+.ln-x { white-space: pre-wrap; word-break: break-word; }
+.lvl-info .ln-x { color: var(--chalk); }
+.lvl-good .ln-x { color: var(--signal); }
+.lvl-warn .ln-x { color: var(--doubt); }
+.lvl-bad  .ln-x { color: var(--fault); }
+
+.doctor .check { display: flex; gap: 12px; align-items: baseline; padding: 6px 16px; font-family: var(--data); font-size: 11.5px; }
+.doctor .check:first-child { padding-top: 12px; }
+.doctor .ck { flex: none; width: 34px; }
+.doctor .ck.ok  { color: var(--signal); }
+.doctor .ck.no  { color: var(--fault); }
+.doctor .ck-l { color: var(--vellum); }
+.doctor .ck-d { color: var(--chalk); }
+.doctor .doc-foot {
+  padding: 10px 16px 14px; margin-top: 6px; border-top: 1px solid var(--grid);
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+}
+
+
+/* -------------------------------------------------------------- results */
+
+.nothing {
+  font-family: var(--data); font-size: 12.5px; line-height: 1.7;
+  color: var(--chalk); max-width: 62ch; padding: 10px 2px 4px;
+}
+.q { margin: 22px 0 0; }
+.q-head { display: flex; gap: 12px; align-items: baseline; margin-bottom: 14px; flex-wrap: wrap; }
+.q-head h2 {
+  font-size: 14px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
+}
+.q-head em { font-style: normal; font-family: var(--data); font-size: 11px; color: var(--chalk); }
+.card { background: var(--panel); border: 1px solid var(--grid); border-radius: 3px; padding: 22px; }
+
+.verdict { font-size: 28px; font-weight: 700; letter-spacing: -.02em; margin-bottom: 6px; }
+.verdict.doubt  { color: var(--doubt); }
+.verdict.signal { color: var(--signal); }
+.verdict.fault  { color: var(--fault); }
+.verdict-sub { color: var(--chalk); font-size: 13.5px; margin-bottom: 22px; max-width: 62ch; }
+.subject {
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+  margin-bottom: 14px; letter-spacing: .03em;
+}
+
+/* the signature element: a value drawn as a range against a zero line */
+.iv { margin: 18px 0 4px; }
+.iv-svg { display: block; width: 100%; height: 30px; }
+.iv-edge { stroke: var(--grid); stroke-width: 1; }
+.iv-zero { stroke: var(--chalk); stroke-width: 1; }
+.iv-range { opacity: .42; transform-box: fill-box; transform-origin: left center;
+            animation: grow .7s cubic-bezier(.2,.8,.3,1) both; }
+.iv-tick  { stroke-width: 2; }
+.iv-signal .iv-range { fill: var(--signal); } .iv-signal .iv-tick { stroke: var(--signal); }
+.iv-doubt  .iv-range { fill: var(--doubt);  } .iv-doubt  .iv-tick { stroke: var(--doubt);  }
+.iv-fault  .iv-range { fill: var(--fault);  } .iv-fault  .iv-tick { stroke: var(--fault);  }
+.iv-scale {
+  display: flex; justify-content: space-between;
+  font-family: var(--data); font-size: 11px; color: var(--chalk); margin-top: 6px;
+}
+.iv-mid { color: var(--vellum); font-weight: 600; }
+.iv-label { font-family: var(--data); font-size: 11px; color: var(--chalk); margin-top: 2px; letter-spacing: .03em; }
+.iv-empty { font-family: var(--data); font-size: 12px; color: var(--chalk); margin: 16px 0; }
+@keyframes grow { from { transform: scaleX(0); } }
+
+.haircut { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--grid); }
+.hc-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.hc-k {
+  font-family: var(--data); font-size: 10.5px; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--chalk);
+}
+.hc-v { font-family: var(--data); font-size: 22px; font-weight: 500; }
+.hc-signal { color: var(--signal); } .hc-doubt { color: var(--doubt); }
+.hc-arrow {
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+  position: relative; padding: 0 26px;
+}
+.hc-arrow::before, .hc-arrow::after {
+  content: ""; position: absolute; top: 50%; width: 14px; height: 1px; background: var(--grid);
+}
+.hc-arrow::before { left: 2px; } .hc-arrow::after { right: 2px; }
+.hc-note { display: block; font-family: var(--data); font-size: 11px; color: var(--chalk); margin-top: 9px; line-height: 1.6; }
+
+/* Hairlines come from each cell's own 1px ring rather than from a grid-coloured
+   backdrop, so a part-filled last row reads as empty panel instead of a slab. */
+.grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px; background: var(--panel); border: 1px solid var(--grid);
+  border-radius: 3px; margin: 0; overflow: hidden;
+}
+.cell { background: var(--panel); padding: 15px 17px; box-shadow: 0 0 0 1px var(--grid); }
+.cell dt {
+  font-family: var(--data); font-size: 10.5px; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--chalk); margin-bottom: 6px;
+}
+.cell dd { margin: 0; font-family: var(--data); font-size: 19px; font-weight: 500; }
+.cell dd.neg { color: var(--fault); }
+.cell dd.pos { color: var(--signal); }
+.cell dd.amber { color: var(--doubt); }
+.cell small { display: block; font-family: var(--data); font-size: 10.5px; color: var(--chalk); margin-top: 4px; }
+
+.spark { width: 100%; height: auto; display: block; }
+.spark-line {
+  fill: none; stroke-width: 1.8; stroke-linejoin: round;
+  stroke-dasharray: 6000; stroke-dashoffset: 0; animation: draw 1.5s ease-out both;
+}
+.spark-line.up { stroke: var(--signal); }
+.spark-line.down { stroke: var(--fault); }
+.spark-base { stroke: var(--chalk); stroke-width: 1; stroke-dasharray: 3 4; }
+.spark-peak { stroke: var(--grid); stroke-width: 1; }
+@keyframes draw { from { stroke-dashoffset: 6000; } }
+.spark-legend {
+  display: flex; gap: 18px; flex-wrap: wrap;
+  font-family: var(--data); font-size: 11px; color: var(--chalk); margin-top: 10px;
+}
+.spark-legend i { display: inline-block; width: 14px; height: 1px; vertical-align: middle; margin-right: 6px; }
+.k-base { background: var(--chalk); }
+.k-peak { background: var(--grid); }
+
+.fold { display: flex; align-items: center; gap: 12px; margin: 5px 0; }
+.fold-n, .fold-v { font-family: var(--data); font-size: 11.5px; color: var(--chalk); }
+.fold-n { flex: none; width: 22px; }
+.fold-v { flex: none; width: 54px; text-align: right; color: var(--vellum); }
+.fold-track { flex: 1 1 auto; min-width: 0; }
+.fold-svg { display: block; width: 100%; height: 14px; background: var(--well); }
+.fold-mid { stroke: var(--chalk); stroke-width: 1; }
+.fold-bar { opacity: .75; transform-box: fill-box; transform-origin: center; animation: grow .6s cubic-bezier(.2,.8,.3,1) both; }
+.fold-bar.pos { fill: var(--signal); transform-origin: left center; }
+.fold-bar.neg { fill: var(--fault); transform-origin: right center; }
+.fold-read {
+  font-family: var(--data); font-size: 11.5px; color: var(--chalk);
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--grid); line-height: 1.7;
+}
+.disagree {
+  margin-top: 14px; padding: 12px 14px; border-radius: 2px;
+  border: 1px solid rgba(229,166,60,.4); border-left: 3px solid var(--doubt);
+  background: rgba(229,166,60,.07);
+  font-family: var(--data); font-size: 11.5px; color: var(--doubt); line-height: 1.65;
+}
+
+.kill { display: inline-flex; align-items: baseline; gap: 10px; margin-bottom: 16px; }
+.kill .k-state {
+  font-family: var(--data); font-size: 11px; letter-spacing: .06em;
+  border: 1px solid var(--grid); border-radius: 2px; padding: 4px 10px;
+}
+.kill .k-state.armed { color: var(--signal); border-color: rgba(69,214,190,.4); }
+.kill .k-state.tripped { color: var(--fault); border-color: rgba(226,104,95,.5); background: rgba(226,104,95,.08); }
+.kill .k-why { font-family: var(--data); font-size: 11px; color: var(--chalk); }
+
+.tape {
+  font-family: var(--data); font-size: 11.5px; color: var(--chalk);
+  max-height: 210px; overflow: auto; margin: 20px 0 0; padding: 0; list-style: none;
+  border-top: 1px solid var(--grid);
+}
+.tape li {
+  padding: 4px 0; border-bottom: 1px solid rgba(30,42,57,.6);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tape li.trade { color: var(--vellum); }
+.tape li.halt  { color: var(--fault); }
+
+.empty { font-family: var(--data); font-size: 12.5px; color: var(--chalk); padding: 6px 0; }
+
+
+/* --------------------------------------------------------- model panels */
+
+/* The nine analyses. Same panel, same amber, same rule that a number the
+   engine could not compute renders as an em dash. Charts are hand-drawn SVG
+   with a viewBox and no fixed width, so nothing here can overflow the page. */
+
+.actions-h {
+  font-family: var(--data); font-size: 10.5px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--chalk);
+  margin: 6px 0 -4px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+}
+.actions-h em { font-style: normal; letter-spacing: .02em; text-transform: none; opacity: .8; }
+
+.q-live {
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+  margin: -6px 0 12px; letter-spacing: .03em; line-height: 1.6;
+}
+.q-live:empty { display: none; }
+
+.mfig { margin: 26px 0 0; padding: 0; }
+.mfig:first-of-type { margin-top: 18px; }
+.mfig-h {
+  display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.mfig-h b { font-size: 13.5px; font-weight: 500; color: var(--vellum); }
+.mfig-h span { font-family: var(--data); font-size: 10.5px; color: var(--chalk); line-height: 1.5; }
+
+.mc { display: block; width: 100%; height: auto; background: var(--well); border-radius: 2px; }
+.mc-hero { background: #0C131B; }
+.mc-heat { background: transparent; }
+
+.mc-grid { stroke: var(--grid); stroke-width: 1; }
+.mc-zero { stroke: var(--chalk); stroke-width: 1; }
+.mc-tick { font-family: var(--data); font-size: 9.5px; fill: var(--chalk); }
+.mc-rowlab { font-size: 10.5px; fill: var(--vellum); }
+.mc-cellv { font-family: var(--data); font-size: 10px; fill: var(--vellum); }
+.mc-axis-t {
+  font-family: var(--data); font-size: 9.5px; fill: var(--chalk);
+  letter-spacing: .08em; text-transform: uppercase;
+}
+.mc-annot { font-family: var(--data); font-size: 10px; fill: var(--vellum); }
+
+.mc-line { fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.mc-line.thin { stroke-width: 1; }
+.mc-line.dash { stroke-dasharray: 4 4; }
+.mc-line.dim  { opacity: .42; stroke-width: 1.1; }
+.mc-band  { stroke: none; opacity: .22; }
+.mc-bar   { opacity: .82; }
+.mc-cell  { stroke: var(--grid); stroke-width: .5; }
+.mc-rule  { stroke-width: 1.4; }
+.mc-rule.dash { stroke-dasharray: 3 3; }
+.mc-tail  { fill: var(--fault); opacity: .07; }
+.mc-diag  { stroke: var(--chalk); stroke-width: 1; stroke-dasharray: 4 4; }
+.mc-gap   { stroke: var(--doubt); stroke-width: 1.2; stroke-dasharray: 2 3; }
+
+.st-sig { stroke: var(--signal); } .fl-sig { fill: var(--signal); } .fi-sig { fill: var(--signal); }
+.st-dbt { stroke: var(--doubt);  } .fl-dbt { fill: var(--doubt);  } .fi-dbt { fill: var(--doubt); }
+.st-flt { stroke: var(--fault);  } .fl-flt { fill: var(--fault);  } .fi-flt { fill: var(--fault); }
+.st-vel { stroke: var(--vellum); } .fl-vel { fill: var(--vellum); } .fi-vel { fill: var(--vellum); }
+.st-chk { stroke: var(--chalk);  } .fl-chk { fill: var(--chalk);  } .fi-chk { fill: var(--chalk); }
+.st-blu { stroke: var(--hue-blue);   } .fl-blu { fill: var(--hue-blue);   } .fi-blu { fill: var(--hue-blue); }
+.st-vio { stroke: var(--hue-violet); } .fl-vio { fill: var(--hue-violet); } .fi-vio { fill: var(--hue-violet); }
+.fl-none { fill: var(--chalk); }
+
+/* ---- the marks the last four panels added ------------------------------
+
+   Each one exists because a figure in those panels is a SHAPE rather than a
+   number: an individual simulated path crossing a percentile band, an interval
+   standing on one swept setting, a quantile with its own value written under
+   it, the distance between two 1st percentiles. None of them carries a colour
+   of its own — colour comes from the same st-/fl- classes as every other
+   series, so a mark cannot say something the palette does not. */
+
+/* Individual Monte Carlo paths, drawn under the fan. Faint on purpose: they are
+   there to be seen crossing the bands, not to be read one at a time. The
+   compound selector beats .mc-line's own stroke-width without !important. */
+.mc-line.mc-path { stroke: var(--vellum); stroke-width: .8; opacity: .22; }
+
+/* One estimate's interval, vertical, with caps. */
+.mc-err    { stroke-width: 1.8; }
+.mc-errcap { stroke-width: 1.6; }
+
+/* The quantile ladder: a spine from the lowest quantile to the highest, an
+   interquartile box, and one mark per quantile. */
+.mc-spine { stroke: var(--grid); stroke-width: 1.5; }
+.mc-mark  { stroke-width: 2.2; }
+.mc-box   { stroke: var(--grid); stroke-width: 1; fill-opacity: .16; }
+
+/* The tail gap, drawn as the distance between two marks. */
+.mc-gapspan { stroke: var(--doubt); stroke-width: 1; stroke-dasharray: 3 3; }
+
+/* A secondary tick — the bucket count under a month, and nothing louder. */
+.mc-tick.mc-dim { opacity: .62; }
+
+.m-legend .mc-path    { color: var(--vellum); opacity: .5; }
+.m-legend .mc-gapspan { color: var(--doubt); border-top-style: dashed; }
+.m-legend .mc-err     { color: var(--signal); }
+
+/* The units note under a greek. Getting these wrong has cost more money than
+   the model has, so it is printed under every one rather than in a footnote. */
+.m-chipnote {
+  display: block; font-style: normal;
+  font-size: 9.5px; color: var(--chalk); letter-spacing: .02em; margin-top: 2px;
+}
+
+/* A heading that opens a block rather than labelling the thing beside it. */
+.m-h-sep { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--grid); }
+
+/* Put-call parity is a self-test, not a result, and it is drawn as one: a
+   quiet box in chalk when it passes, in fault when it does not. The residual
+   is set in scientific notation because its SCALE is the entire message — at
+   1e-16 the pricer agrees with itself to double precision, and "0.00" is the
+   one rendering that makes that look like a number nobody computed. */
+.m-selftest {
+  margin-top: 26px; padding: 14px 16px;
+  border: 1px solid var(--grid); border-left: 3px solid var(--chalk);
+  border-radius: 2px; background: var(--well);
+}
+.m-selftest .m-h { margin-bottom: 8px; }
+.m-sci {
+  display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline;
+  font-family: var(--data); font-size: 17px; color: var(--vellum);
+}
+.m-sci b { font-weight: 500; }
+.m-sci-k {
+  font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--chalk);
+}
+.m-selftest-b {
+  font-family: var(--data); font-size: 11.5px; color: var(--chalk);
+  line-height: 1.7; margin-top: 10px; max-width: 86ch;
+}
+.m-selftest.bad { border-color: rgba(226,104,95,.45); border-left-color: var(--fault); }
+.m-selftest.bad .m-sci b { color: var(--fault); }
+.m-selftest.bad .m-selftest-b { color: var(--fault); }
+
+.mk-entry { opacity: .95; }
+.mk-exit  { fill: none; stroke: var(--chalk); stroke-width: 1.3; }
+.mk-breach { fill: var(--fault); stroke: var(--ground); stroke-width: .8; }
+.mk-pt { stroke: var(--ground); stroke-width: .8; }
+.mk-port { stroke: var(--ground); stroke-width: 1.2; }
+
+.m-legend {
+  display: flex; gap: 8px 18px; flex-wrap: wrap; margin-top: 10px;
+  font-family: var(--data); font-size: 10.5px; color: var(--chalk);
+}
+.m-legend .k { display: inline-block; vertical-align: middle; margin-right: 6px; }
+.m-legend .k-line { width: 15px; height: 0; border-top: 2px solid currentColor; }
+.m-legend .k-box  { width: 11px; height: 11px; border-radius: 1px; background: currentColor; opacity: .8; }
+.m-legend .k-dot  { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.m-legend .k-tri  { width: 0; height: 0; border-left: 5px solid transparent;
+                    border-right: 5px solid transparent; border-bottom: 8px solid currentColor; }
+/* The legend swatch borrows the series colour through currentColor, so one
+   class list drives both the SVG mark and the key beside it. */
+.m-legend .st-sig, .m-legend .fl-sig, .m-legend .fi-sig { color: var(--signal); }
+.m-legend .st-dbt, .m-legend .fl-dbt, .m-legend .fi-dbt { color: var(--doubt); }
+.m-legend .st-flt, .m-legend .fl-flt, .m-legend .fi-flt { color: var(--fault); }
+.m-legend .st-vel, .m-legend .fl-vel, .m-legend .fi-vel { color: var(--vellum); }
+.m-legend .st-chk, .m-legend .fl-chk, .m-legend .fi-chk { color: var(--chalk); }
+.m-legend .st-blu, .m-legend .fl-blu, .m-legend .fi-blu { color: var(--hue-blue); }
+.m-legend .st-vio, .m-legend .fl-vio, .m-legend .fi-vio { color: var(--hue-violet); }
+.m-legend .mk-exit  { color: var(--chalk); }
+.m-legend .mk-breach { color: var(--fault); }
+.m-legend .mc-gap   { color: var(--doubt); border-top-style: dashed; }
+.m-legend .mc-diag  { color: var(--chalk); border-top-style: dashed; }
+.m-legend .dash { border-top-style: dashed; }
+.m-legend .dim  { opacity: .5; }
+
+.m-grid { margin-top: 24px; }
+.m-note, .m-why {
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+  line-height: 1.65; margin-top: 12px; max-width: 82ch;
+}
+.m-why b { color: var(--vellum); font-weight: 500; }
+.m-gone {
+  font-family: var(--data); font-size: 11.5px; color: var(--chalk);
+  line-height: 1.65; margin: 20px 0 0; padding: 11px 14px;
+  border: 1px dashed var(--grid); border-radius: 2px; max-width: 82ch;
+}
+.m-h {
+  font-family: var(--data); font-size: 10.5px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--chalk); font-weight: 400; margin-bottom: 10px;
+}
+.m-ivbox { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--grid); }
+
+.mono { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--grid); }
+.mono-row { display: flex; flex-wrap: wrap; gap: 4px 2px; align-items: stretch; }
+.mono-cell {
+  flex: 1 1 88px; min-width: 88px; background: var(--well);
+  border: 1px solid var(--grid); border-radius: 2px; padding: 9px 11px;
+  display: flex; flex-direction: column; gap: 2px; position: relative;
+}
+.mono-q { font-family: var(--data); font-size: 10px; letter-spacing: .1em; color: var(--chalk); }
+.mono-v { font-family: var(--data); font-size: 15px; color: var(--signal); }
+.mono-v.neg { color: var(--fault); }
+.mono-step { position: absolute; top: 8px; right: 9px; font-size: 9px; }
+.mono-step.up { color: var(--signal); }
+.mono-step.down { color: var(--fault); }
+.mono-read {
+  font-family: var(--data); font-size: 11.5px; color: var(--chalk);
+  line-height: 1.7; margin-top: 12px; max-width: 82ch;
+}
+.mono-read.ok { color: var(--signal); }
+.mono-read.no { color: var(--doubt); }
+
+.m-lesson { margin-top: 26px; }
+.m-lesson-read {
+  font-family: var(--data); font-size: 11.5px; color: var(--doubt);
+  line-height: 1.7; margin-top: 14px; padding: 12px 14px; max-width: 82ch;
+  border: 1px solid rgba(229,166,60,.4); border-left: 3px solid var(--doubt);
+  background: rgba(229,166,60,.07); border-radius: 2px;
+}
+
+.m-chips { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--grid); }
+.m-chiprow { display: flex; flex-wrap: wrap; gap: 6px; }
+.m-chip {
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+  border: 1px solid var(--grid); border-radius: 2px; padding: 4px 9px; background: var(--well);
+}
+.m-chip b { color: var(--vellum); font-weight: 500; margin-right: 6px; }
+
+/* Wide content scrolls inside its own box. The page never scrolls sideways. */
+.m-tablewrap { margin-top: 26px; overflow-x: auto; border: 1px solid var(--grid); border-radius: 2px; }
+.m-table { border-collapse: collapse; width: 100%; min-width: 560px; font-family: var(--data); font-size: 11px; }
+.m-table caption {
+  text-align: left; padding: 10px 12px; color: var(--chalk);
+  font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+}
+.m-table th, .m-table td { padding: 6px 12px; text-align: right; border-top: 1px solid var(--grid); }
+.m-table th { color: var(--chalk); font-weight: 400; letter-spacing: .06em; }
+.m-table td { color: var(--vellum); }
+.m-table th:first-child, .m-table td:first-child,
+.m-table th:nth-child(2), .m-table td:nth-child(2) { text-align: left; }
+.m-table .t-name { color: var(--vellum); }
+.m-table .t-sig { color: var(--signal); }
+.m-table .t-dbt { color: var(--doubt); }
+.m-table tbody tr:hover td { background: rgba(116,137,158,.06); }
+
+.disagree.bad {
+  border-color: rgba(226,104,95,.45); border-left-color: var(--fault);
+  background: rgba(226,104,95,.07); color: var(--fault);
+}
+
+
+/* --------------------------------------------------------------- footer */
+
+.strip {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 26px;
+  max-width: 1480px; margin: 0 auto; padding: 26px 24px;
+  border-top: 1px solid var(--grid);
+}
+.strip-col { min-width: 0; }
+.runs, .gates { list-style: none; margin: 0; padding: 0; }
+.runs li { border-bottom: 1px solid rgba(30,42,57,.7); }
+.runs button {
+  display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left;
+  background: none; border: none; cursor: pointer; padding: 7px 2px;
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+}
+.runs button:hover { color: var(--vellum); }
+.runs .r-kind { flex: none; width: 62px; color: var(--signal); }
+.runs .r-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runs .r-when { flex: none; }
+.gates li {
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+  padding: 5px 0 5px 20px; position: relative; line-height: 1.5;
+}
+.gates li::before {
+  content: "[ ]"; position: absolute; left: 0; color: #46596B;
+}
+
+.fine {
+  max-width: 1480px; margin: 0 auto; padding: 0 24px 46px;
+  font-family: var(--data); font-size: 10.5px; color: var(--chalk);
+  line-height: 1.7; max-width: 82ch;
+}
+
+
+/* --------------------------------------------------------------- closed */
+
+.closed {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--ground); padding: 24px;
+}
+.closed-in { max-width: 46ch; text-align: left; }
+.closed-in h2 { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin: 22px 0 10px; }
+.closed-in p { color: var(--chalk); font-size: 13.5px; }
+
+
+/* ----------------------------------------------------------- responsive */
+
+@media (max-width: 1120px) {
+  .desk { grid-template-columns: 300px minmax(0, 1fr); gap: 20px; padding: 20px 16px 32px; }
+  .strip, .fine { padding-left: 16px; padding-right: 16px; }
+}
+@media (max-width: 980px) {
+  .desk { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: static; max-height: none; }
+  .bar { padding: 12px 16px; }
+  /* Stacked, the rail is the full page width — pack the controls into columns
+     instead of stretching one field across it. */
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px 24px; }
+  .pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 6px; }
+  .hypo { max-width: 78ch; }
+}
+@media (max-width: 560px) {
+  .verdict { font-size: 22px; }
+  .field { flex-wrap: wrap; }
+  .field input[type="text"], .field input[type="number"], .field select { flex-basis: 100%; width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+
+/* ======================================================================== */
+/* THE OPENING TAPE — search, score, dossier, insider, screener             */
+/*                                                                          */
+/* Everything here is prefixed tp-, because .tape was already taken by the   */
+/* paper session's fill list further up this file and two rules named the    */
+/* same thing is how a panel starts inheriting a colour nobody chose.        */
+/*                                                                          */
+/* One palette rule is load-bearing and is worth stating: grade A is         */
+/* --signal, B is --doubt, C is --chalk. C is NOT --fault. On one name over  */
+/* one window C is the answer the arithmetic gives most of the time, and     */
+/* drawing it in red would make the stylesheet claim something the numbers   */
+/* do not.                                                                   */
+/* ======================================================================== */
+
+/* ------------------------------------------------------------ the search */
+
+/* The two control sections are ordinary .q panels built from .fields/.field,
+   the rail's own idiom — so nothing here restyles them. The one thing the rail
+   idiom gets wrong out here is the stacking: .fields is a single column because
+   the rail is 330px wide, and these two sit in the work column at four times
+   that. Columns, not one field per line. */
+#tape-search .fields, #screener .fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px 26px;
+}
+#tape-search .field input[type="checkbox"] { flex: none; accent-color: var(--signal); }
+
+.tape-suggest {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline;
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+  margin-top: 12px;
+}
+.tape-suggest:empty { display: none; }
+.tape-suggest button {
+  font: inherit; cursor: pointer;
+  background: transparent; color: var(--vellum);
+  border: 1px solid var(--grid); border-radius: 2px; padding: 3px 9px;
+}
+.tape-suggest button:hover { border-color: var(--signal); color: var(--signal); }
+
+/* The four panels are bare divs that app.js unhides. They carry no margin of
+   their own: .work is a flex column with its own gap. */
+#panel-score, #panel-dossier, #panel-insider, #panel-screen { min-width: 0; }
+#panel-score:empty, #panel-dossier:empty,
+#panel-insider:empty, #panel-screen:empty { display: none; }
+#panel-screen { margin-top: 18px; }
+
+.tp-live {
+  font-family: var(--data); font-size: 11.5px; color: var(--chalk);
+  margin-bottom: 12px; letter-spacing: .02em;
+}
+.tp-live:empty { display: none; }
+
+.tp-gone, .tp-empty {
+  font-family: var(--data); font-size: 12px; color: var(--chalk);
+  line-height: 1.7; max-width: 78ch; padding: 6px 0;
+}
+.tp-block { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--grid); }
+.tp-block:first-of-type { margin-top: 18px; }
+
+
+/* ------------------------------------------------------------- the score */
+
+#panel-score {
+  background: var(--panel); border: 1px solid var(--grid); border-radius: 3px;
+  padding: 22px;
+}
+.tp-scorehead { display: flex; gap: 26px; align-items: flex-start; flex-wrap: wrap; }
+
+.tp-gradebox {
+  flex: none; width: 132px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 12px 0 10px;
+  border: 1px solid var(--grid); border-radius: 3px; background: var(--well);
+}
+.tp-grade {
+  font-size: 76px; line-height: 1; font-weight: 700; letter-spacing: -.04em;
+  font-family: var(--display);
+}
+.tp-grade-k {
+  font-family: var(--data); font-size: 10px; letter-spacing: .18em;
+  text-transform: uppercase; color: var(--chalk); margin-top: 8px;
+}
+.tp-grade-sig .tp-grade { color: var(--signal); }
+.tp-grade-sig { border-color: rgba(69,214,190,.42); }
+.tp-grade-dbt .tp-grade { color: var(--doubt); }
+.tp-grade-dbt { border-color: rgba(229,166,60,.42); }
+.tp-grade-chk .tp-grade { color: var(--chalk); }
+
+.tp-scoremeta { flex: 1 1 320px; min-width: 0; }
+.tp-gradegloss { font-size: 14px; color: var(--vellum); max-width: 68ch; margin-bottom: 10px; }
+.tp-counts, .tp-basis, .tp-source, .tp-innote, .tp-scfilter {
+  font-family: var(--data); font-size: 11.5px; color: var(--chalk);
+  line-height: 1.7; max-width: 82ch;
+}
+.tp-basis { font-size: 12px; }
+
+.tp-split { margin-top: 14px; }
+.tp-splitsvg {
+  display: block; width: 100%; height: 30px;
+  background: var(--well); border-radius: 2px;
+}
+.tp-seg { transform-box: fill-box; transform-origin: left center;
+          animation: grow .55s cubic-bezier(.2,.8,.3,1) both; }
+.tp-segv {
+  font-family: var(--data); font-size: 13px; fill: var(--ground); font-weight: 600;
+}
+.tp-splitkey { margin-top: 9px; }
+
+.tp-meter { max-width: 62ch; }
+.tp-meter-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tp-meter-k {
+  font-family: var(--data); font-size: 10.5px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--chalk);
+}
+.tp-meter-v { font-family: var(--data); font-size: 20px; color: var(--vellum); }
+.tp-metersvg { display: block; width: 100%; height: 14px; margin-top: 6px; }
+.tp-meter-bg { fill: var(--well); stroke: var(--grid); stroke-width: 1; }
+.tp-meter-fill { fill: var(--hue-blue); opacity: .55; }
+.tp-meter-cap { stroke: var(--vellum); stroke-width: 1.5; stroke-dasharray: 2 2; }
+.tp-meter-note {
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+  line-height: 1.7; margin-top: 8px;
+}
+
+.tp-dissent { border-top-color: rgba(229,166,60,.4); }
+.tp-dissentlist, .tp-caveatlist, .tp-warnlist { margin: 4px 0 0; padding-left: 18px; }
+.tp-dissentlist li, .tp-caveatlist li, .tp-warnlist li {
+  font-size: 13px; color: var(--vellum); line-height: 1.65;
+  margin: 8px 0; max-width: 84ch;
+}
+.tp-dissentlist li::marker { color: var(--doubt); }
+.tp-dissent-none {
+  font-family: var(--data); font-size: 12px; color: var(--chalk);
+  line-height: 1.7; max-width: 80ch;
+}
+
+.tp-components td.tp-notecell {
+  text-align: left; color: var(--chalk); line-height: 1.6;
+  min-width: 30ch; max-width: 60ch; white-space: normal;
+}
+.tp-components td:nth-child(2), .tp-components th:nth-child(2),
+.tp-components td:nth-child(3), .tp-components th:nth-child(3) { text-align: left; }
+.tp-components td.tp-famcell, .tp-components th:nth-child(5) { text-align: left; }
+.tp-components tr.tp-dissents td { background: rgba(229,166,60,.08); }
+
+
+/* ------------------------------------------------- the family correction */
+
+/* Nine models on one name is nine chances at a finding. The block that charges
+   the page for that is drawn in amber when it took something away and in chalk
+   when it did not, because "the correction found nothing left" is the loud
+   reading and "the correction was not needed" is not a reading it ever gives. */
+
+.tp-mt .m-h { margin-top: 0; }
+.tp-mtbox {
+  margin: 12px 0 16px; padding: 16px 20px;
+  border: 1px solid var(--grid); border-left: 3px solid var(--chalk);
+  border-radius: 2px; background: var(--well);
+}
+.tp-mtbox-bad {
+  border-color: rgba(229,166,60,.5); border-left-color: var(--doubt);
+  background: rgba(229,166,60,.08);
+}
+.tp-mtbig {
+  font-size: 22px; font-weight: 700; letter-spacing: -.02em; color: var(--vellum);
+}
+.tp-mtbox-bad .tp-mtbig { color: var(--doubt); }
+.tp-mtsub, .tp-mtwhy, .tp-mtnote {
+  font-family: var(--data); font-size: 12px; color: var(--chalk);
+  line-height: 1.75; max-width: 88ch;
+}
+.tp-mtsub { margin-top: 8px; }
+.tp-mtwhy { color: var(--vellum); margin: 0 0 14px; }
+.tp-mtnote {
+  margin-top: 14px; padding: 12px 14px;
+  border: 1px solid var(--grid); border-radius: 2px; background: var(--well);
+}
+
+/* The dossier's copy: one line at the top of nine sections that would otherwise
+   read as nine independent opinions. */
+.tp-mtbanner {
+  margin: 16px 0 20px; padding: 14px 18px;
+  border: 1px solid var(--grid); border-left: 3px solid var(--chalk);
+  border-radius: 2px; background: var(--well);
+}
+.tp-mtbanner-bad {
+  border-color: rgba(229,166,60,.35); border-left-color: var(--doubt);
+  background: rgba(229,166,60,.06);
+}
+.tp-mtbanner .m-h { margin-top: 0; }
+.tp-mtbanner .tp-mtbig { font-size: 18px; margin-top: 6px; }
+
+/* Four states, four colours, and the one that matters is tp-fam-out: an
+   interval that cleared zero on its own and did not clear the family. */
+.tp-fam {
+  display: inline-block; margin-left: 8px;
+  font-family: var(--data); font-size: 9.5px; letter-spacing: .08em;
+  text-transform: uppercase; border-radius: 2px; padding: 1px 6px;
+  white-space: nowrap;
+}
+.tp-fam-live { color: var(--signal); border: 1px solid rgba(69,214,190,.5); }
+.tp-fam-out  { color: var(--doubt);  border: 1px solid rgba(229,166,60,.6);
+               background: rgba(229,166,60,.1); }
+.tp-fam-no   { color: var(--chalk);  border: 1px solid var(--grid); }
+.tp-fam-na   { color: var(--chalk);  border: 1px dashed var(--grid); }
+
+.tp-mttable tr.tp-correctedout td, .tp-components tr.tp-correctedout td {
+  background: rgba(229,166,60,.1);
+}
+.tp-mttable tr.tp-survived td { background: rgba(69,214,190,.06); }
+.tp-mttable td.tp-notecell {
+  text-align: left; color: var(--chalk); line-height: 1.6;
+  min-width: 26ch; max-width: 52ch; white-space: normal;
+}
+.tp-mttable td:first-child, .tp-mttable th:first-child { text-align: left; }
+.tp-mttable td:first-child .tp-fam { display: block; margin: 3px 0 0; }
+
+/* In the dossier, under each section heading. */
+.tp-secfam { margin: 6px 0 2px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.tp-secfam .tp-fam { margin-left: 0; }
+.tp-secfam-d {
+  font-family: var(--data); font-size: 11px; color: var(--chalk);
+}
+.tp-flag {
+  display: inline-block; margin-left: 8px;
+  font-family: var(--data); font-size: 9.5px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--doubt);
+  border: 1px solid rgba(229,166,60,.5); border-radius: 2px; padding: 1px 5px;
+}
+.tp-leancell { white-space: nowrap; }
+.tp-lean { display: inline-flex; align-items: center; gap: 7px; }
+.tp-leansvg { display: block; width: 74px; height: 12px; background: var(--well); }
+.tp-lean-mid { stroke: var(--chalk); stroke-width: 1; }
+.tp-lean-bar { opacity: .8; }
+.tp-lean-v { color: var(--vellum); }
+.tp-nolean { color: var(--chalk); }
+
+/* Plainly, at reading size. An apologetic 8px grey disclaimer is a disclaimer
+   designed not to be read, which is worse than none. */
+.tp-disclaimer {
+  margin-top: 26px; padding: 14px 16px;
+  border: 1px solid var(--grid); border-left: 3px solid var(--chalk);
+  border-radius: 2px; background: var(--well);
+}
+.tp-disclaimer p { font-size: 13px; line-height: 1.7; color: var(--vellum); max-width: 88ch; }
+
+
+/* ----------------------------------------------------------- the dossier */
+
+.tp-doshead { margin-bottom: 18px; }
+.tp-dostitle { font-size: 30px; font-weight: 700; letter-spacing: -.03em; }
+.tp-source { margin-top: 2px; }
+
+.tp-warnbox {
+  margin: 16px 0 20px; padding: 14px 18px;
+  border: 1px solid rgba(229,166,60,.35); border-left: 3px solid var(--doubt);
+  border-radius: 2px; background: rgba(229,166,60,.06);
+}
+.tp-warnbox .m-h { margin-top: 0; }
+
+.tp-navslot { position: sticky; top: 56px; z-index: 6; }
+.tp-nav {
+  background: rgba(14,20,28,.94);
+  border: 1px solid var(--grid); border-radius: 3px;
+  padding: 8px 10px; margin-bottom: 18px;
+  overflow-x: auto;
+}
+.tp-nav ul {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 4px 6px;
+}
+.tp-navlink {
+  display: inline-block;
+  font-family: var(--data); font-size: 11px; letter-spacing: .02em;
+  color: var(--vellum); text-decoration: none;
+  border: 1px solid var(--grid); border-radius: 2px; padding: 3px 9px;
+  white-space: nowrap;
+}
+.tp-navlink:hover { border-color: var(--signal); color: var(--signal); }
+.tp-navlink-skip { color: var(--chalk); border-style: dashed; }
+.tp-navdot { margin-left: 5px; color: var(--doubt); }
+
+.tp-sec { margin-top: 22px; }
+.tp-sec:focus-visible { outline: 2px solid var(--signal); outline-offset: 6px; }
+.tp-sec .q-head h3 { font-size: 19px; font-weight: 600; letter-spacing: -.02em; }
+.tp-livesub { margin-top: 2px; }
+
+.tp-skipped .card { border-style: dashed; }
+.tp-skip-k {
+  font-family: var(--data); font-size: 10.5px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--doubt); margin-bottom: 8px;
+}
+.tp-skip-why { font-size: 13.5px; color: var(--vellum); max-width: 84ch; line-height: 1.65; }
+
+.tp-chipnote {
+  display: block; font-style: normal;
+  font-size: 9.5px; color: var(--chalk); letter-spacing: .02em; margin-top: 2px;
+}
+
+
+/* ----------------------------------------------------------- the insider */
+
+#panel-insider {
+  background: var(--panel); border: 1px solid var(--grid); border-radius: 3px;
+  padding: 22px;
+}
+.tp-inhead { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+.tp-ingrade {
+  flex: none; width: 108px; text-align: center;
+  border: 1px solid var(--grid); border-radius: 3px; background: var(--well);
+  padding: 12px 0 10px;
+}
+.tp-ingrade-v { display: block; font-size: 42px; line-height: 1; font-weight: 700; }
+.tp-ingrade-k {
+  display: block; font-family: var(--data); font-size: 10.5px;
+  color: var(--chalk); margin-top: 8px;
+}
+.tp-inmeta { flex: 1 1 320px; min-width: 0; }
+.tp-evidence {
+  display: inline-block; margin: 6px 0 8px;
+  font-family: var(--data); font-size: 11px; letter-spacing: .1em;
+  text-transform: uppercase;
+  border: 1px solid var(--grid); border-radius: 2px; padding: 3px 9px;
+  color: var(--chalk);
+}
+.tp-ev-strong { color: var(--signal); border-color: rgba(69,214,190,.45); }
+.tp-ev-weak   { color: var(--doubt);  border-color: rgba(229,166,60,.45); }
+
+.tp-cluster {
+  margin: 20px 0 4px; padding: 14px 18px;
+  border: 1px solid var(--grid); border-left: 3px solid var(--chalk);
+  border-radius: 2px; background: var(--well);
+}
+.tp-cluster-k {
+  font-family: var(--data); font-size: 11px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--chalk); margin-bottom: 6px;
+}
+.tp-cluster-b { font-size: 13px; color: var(--vellum); line-height: 1.7; max-width: 86ch; }
+.tp-cluster-on {
+  border-color: rgba(69,214,190,.45); border-left-color: var(--signal);
+  background: rgba(69,214,190,.07);
+}
+.tp-cluster-on .tp-cluster-k { color: var(--signal); font-size: 14px; letter-spacing: .2em; }
+
+.tp-insider td, .tp-insider th { vertical-align: middle; }
+.tp-insider td:nth-child(3), .tp-insider th:nth-child(3),
+.tp-insider td:nth-child(4), .tp-insider th:nth-child(4) { text-align: left; }
+.tp-role { color: var(--chalk); max-width: 26ch; }
+.tp-code {
+  display: inline-block; width: 18px; text-align: center;
+  border: 1px solid currentColor; border-radius: 2px;
+  font-size: 10px; line-height: 14px; margin-right: 7px;
+}
+.tp-codeword { color: var(--chalk); font-size: 10.5px; }
+
+.tp-tx-buy  .tp-code, .tp-tx-buy  td:first-child { color: var(--signal); }
+.tp-tx-buy  td { color: var(--vellum); }
+.tp-tx-sell .tp-code, .tp-tx-sell td:first-child { color: var(--fault); }
+.tp-tx-pay  td, .tp-tx-other td { color: var(--chalk); }
+.tp-tx-pay  .tp-code, .tp-tx-other .tp-code { color: var(--chalk); }
+/* Dollar value drives the emphasis, so the purchases worth arguing about are
+   the ones that read as heavy. */
+.tp-insider tr.tp-mid td { font-size: 11.5px; }
+.tp-insider tr.tp-big td { font-size: 12.5px; font-weight: 600; }
+.tp-insider tr.tp-big.tp-tx-buy td { color: #EAF6F3; }
+.tp-insider tr.tp-big td:first-child { box-shadow: inset 2px 0 0 currentColor; }
+
+.tp-valcell { white-space: nowrap; }
+.tp-valtrack {
+  display: inline-block; vertical-align: middle;
+  width: 92px; height: 8px; margin-right: 9px;
+  background: var(--well); border: 1px solid var(--grid); border-radius: 1px;
+  overflow: hidden;
+}
+.tp-valbar {
+  display: block; height: 100%; opacity: .78;
+  transform-origin: left center; animation: grow .6s cubic-bezier(.2,.8,.3,1) both;
+}
+.tp-valbar-buy  { background: var(--signal); }
+.tp-valbar-sell { background: var(--fault); }
+.tp-valnum { display: inline-block; min-width: 8ch; text-align: right; }
+.tp-inkey { margin-top: 10px; }
+
+.tp-caveats { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--grid); }
+
+/* The screener's provenance line is one unbroken comma-separated list of every
+   ticker it asked for, and an unbreakable token is how a panel that otherwise
+   fits pushes the WHOLE PAGE sideways. Measured at 375px: 457px of document
+   against a 375px viewport, all of it this one line. Scoped to the four tape
+   panels rather than applied to .m-note everywhere. */
+#panel-score .m-note, #panel-dossier .m-note,
+#panel-insider .m-note, #panel-screen .m-note { overflow-wrap: break-word; }
+
+
+/* ---------------------------------------------------------- the screener */
+
+#panel-screen {
+  background: var(--panel); border: 1px solid var(--grid); border-radius: 3px;
+  padding: 22px;
+}
+#panel-screen:empty { padding: 0; border: 0; }
+.tp-schead { margin-bottom: 16px; }
+.tp-sctitle { font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
+.tp-scfilter { margin-top: 6px; }
+
+/* The luck line, stated in words, above the table that draws it. When nothing
+   cleared it this is the finding and it is the largest thing on the panel. */
+.tp-luckbox {
+  margin: 18px 0; padding: 16px 20px;
+  border: 1px solid var(--grid); border-left: 3px solid var(--chalk);
+  border-radius: 2px; background: var(--well);
+}
+.tp-luckbig { font-size: 20px; font-weight: 600; letter-spacing: -.01em; color: var(--vellum); }
+.tp-lucksub {
+  font-family: var(--data); font-size: 12px; color: var(--chalk);
+  line-height: 1.75; margin-top: 8px; max-width: 88ch;
+}
+.tp-luckbox-bad {
+  border-color: rgba(229,166,60,.5); border-left-color: var(--doubt);
+  background: rgba(229,166,60,.08);
+}
+.tp-luckbox-bad .tp-luckbig {
+  font-size: 32px; font-weight: 700; letter-spacing: -.03em; color: var(--doubt);
+}
+.tp-luckbox-bad .tp-lucksub { color: var(--vellum); font-size: 12.5px; }
+
+.tp-screen { min-width: 860px; }
+.tp-screen th { vertical-align: bottom; }
+.tp-screen td, .tp-screen th { padding-left: 9px; padding-right: 9px; }
+/* Keyed on the class, not on the column index: the ranking column is built from
+   the payload's `ranked_by` and can appear or not, which moves every nth-child
+   after it by one. */
+.tp-screen td.tp-sccell, .tp-screen th.tp-scaxiscell { text-align: left; padding: 2px 9px; }
+.tp-screen .tp-rank { font-size: 13px; }
+.tp-screen .tp-reported { font-size: 12px; opacity: .85; }
+.tp-rankmark {
+  display: block; font-style: normal;
+  font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--signal);
+}
+.tp-vmark { color: var(--chalk); }
+.tp-rowverdict {
+  display: block; font-size: 9.5px; letter-spacing: .08em;
+  text-transform: uppercase; margin-top: 2px;
+}
+.tp-shcell { white-space: nowrap; }
+.tp-shv { display: block; }
+.tp-shci { display: block; font-size: 10px; color: var(--chalk); }
+.tp-scaxis, .tp-scrow { display: block; }
+.tp-scaxiscell { min-width: 230px; }
+.tp-sccell { padding-top: 0; padding-bottom: 0; }
+.tp-ci { stroke: var(--chalk); stroke-width: 1.4; }
+.tp-cicap { stroke: var(--chalk); stroke-width: 1; opacity: .8; }
+.tp-dot { stroke: var(--ground); stroke-width: .8; }
+.tp-luck { stroke: var(--doubt); stroke-width: 1.6; }
+.tp-luck95 { stroke: var(--doubt); stroke-width: 1; stroke-dasharray: 2 3; opacity: .65; }
+.tp-lucklab {
+  font-family: var(--data); font-size: 9.5px; fill: var(--doubt); letter-spacing: .04em;
+}
+.tp-beats td { background: rgba(69,214,190,.05); }
+.tp-within td { color: var(--chalk); }
+.tp-within td.t-name { color: var(--vellum); }
+.tp-sckey { margin-top: 10px; }
+.m-legend .tp-k-ci     { color: var(--chalk); }
+.m-legend .tp-k-luck   { color: var(--doubt); }
+.m-legend .tp-k-luck95 { color: var(--doubt); border-top-style: dashed; opacity: .7; }
+
+
+/* ------------------------------------------------- the tape, responsive  */
+
+@media (max-width: 980px) {
+  .tp-navslot { position: static; }
+  .tp-grade { font-size: 60px; }
+  .tp-gradebox { width: 104px; }
+  .tp-scorehead, .tp-inhead { gap: 16px; }
+}
+@media (max-width: 640px) {
+  #panel-score, #panel-insider, #panel-screen { padding: 16px; }
+  .tp-dostitle { font-size: 24px; }
+  .tp-luckbox-bad .tp-luckbig { font-size: 26px; }
+  .tp-components td.tp-notecell { min-width: 22ch; }
+  .tp-mtbig { font-size: 18px; }
+  .tp-mtbanner .tp-mtbig { font-size: 16px; }
+  .tp-fam { white-space: normal; }
+}
+
+/* The desk already disables every animation under this query; these are named
+   again because each one animates a LENGTH that encodes a number, and a bar
+   caught mid-grow is a bar reporting the wrong value. */
+@media (prefers-reduced-motion: reduce) {
+  .tp-seg, .tp-valbar { animation: none !important; transform: none !important; }
+}
+
+
+/* ======================================================================== */
+/* THE WHOLE BOOK — the picker, and the panel that answers it               */
+/*                                                                          */
+/* Everything here is prefixed pf-, for the same reason the tape is prefixed */
+/* tp-: two rules named the same thing is how a panel starts inheriting a    */
+/* colour nobody chose. The charts themselves reuse the .mc / .mfig /        */
+/* .m-table / .grid idiom unchanged, so a figure in this panel and a figure  */
+/* in a model panel are the same object.                                     */
+/*                                                                          */
+/* One palette rule is load-bearing. The three semantic colours mean signal  */
+/* / doubt / fault everywhere on this desk, so they are NEVER used to tell   */
+/* SPY from GLD. The twelve series fills below say nothing at all — they are */
+/* muted on purpose, so that no band in a stacked area can be misread as the */
+/* desk calling that holding good or bad — and the two paired bars in the    */
+/* hero borrow the two hues that already mean nothing, blue and violet.      */
+/* ======================================================================== */
+
+:root {
+  --pf-s1:#6EA8DC; --pf-s2:#AE8BD8; --pf-s3:#79B0A0; --pf-s4:#C7A06B;
+  --pf-s5:#8593B5; --pf-s6:#BE8FA6; --pf-s7:#9DB878; --pf-s8:#6FAEBC;
+  --pf-s9:#B3A878; --pf-s10:#9A93CE; --pf-s11:#7FA08C; --pf-s12:#C08A80;
+}
+
+
+/* ------------------------------------------------------------ the picker */
+
+/* Same .fields/.field idiom as the rail, in columns, for the same reason the
+   tape's two forms are: this section sits in the work column at four times the
+   rail's width, and one field per line out here is a form you scroll. */
+#portfolio-build .fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px 26px;
+}
+#portfolio-build .pf-add {
+  align-items: end;
+  padding-bottom: 16px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--grid);
+}
+#portfolio-build .pf-add #btn-pf-add { justify-self: start; padding: 7px 16px; }
+
+.pf-listh { margin: 18px 0 8px; }
+
+.pf-list { list-style: none; margin: 0 0 10px; padding: 0; }
+.pf-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 12px; margin-bottom: 4px;
+  background: var(--well); border: 1px solid var(--grid); border-radius: 2px;
+}
+.pf-sym {
+  font-family: var(--data); font-size: 13px; color: var(--vellum);
+  flex: 0 0 auto; min-width: 92px; letter-spacing: .04em;
+}
+.pf-class {
+  font-family: var(--data); font-size: 10.5px; color: var(--chalk);
+  border: 1px solid var(--grid); border-radius: 2px; padding: 2px 8px;
+}
+.pf-row .pf-wlab {
+  font-family: var(--data); font-size: 10.5px; color: var(--chalk);
+  margin-left: auto; letter-spacing: .06em; text-transform: uppercase;
+}
+.pf-row input[type="number"] {
+  flex: 0 0 92px; width: 92px;
+  background: var(--panel); color: var(--vellum);
+  border: 1px solid var(--grid); border-radius: 2px;
+  font-family: var(--data); font-size: 12px; padding: 5px 8px;
+}
+/* A weight the allocation is going to solve for itself is not a control, and it
+   should not look like one. */
+.pf-row input[type="number"]:disabled { opacity: .36; cursor: not-allowed; }
+.pf-drop { flex: none; }
+.pf-empty {
+  font-family: var(--data); font-size: 11.5px; color: var(--chalk);
+  line-height: 1.65; padding: 11px 14px; max-width: 78ch;
+  border: 1px dashed var(--grid); border-radius: 2px;
+}
+
+
+/* ------------------------------------------------------------- the panel */
+
+#panel-portfolio {
+  min-width: 0;
+  background: var(--panel); border: 1px solid var(--grid); border-radius: 3px;
+  padding: 22px;
+}
+#panel-portfolio:empty { display: none; }
+#panel-portfolio .q-head { margin-bottom: 10px; }
+
+.pf-live {
+  font-family: var(--data); font-size: 11.5px; color: var(--chalk);
+  margin-bottom: 12px; letter-spacing: .02em;
+}
+.pf-live:empty { display: none; }
+
+.pf-gone {
+  font-family: var(--data); font-size: 12px; color: var(--chalk);
+  line-height: 1.7; max-width: 78ch; margin-top: 16px;
+  padding: 11px 14px; border: 1px dashed var(--grid); border-radius: 2px;
+}
+
+.pf-block { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--grid); }
+
+/* The server's own notes under its own headline. A list, because they are a
+   list — and each one is a separate finding, not a paragraph to skim. */
+.pf-notes {
+  list-style: none; margin: 12px 0 0; padding: 0;
+  font-family: var(--data); font-size: 11.5px; color: var(--chalk); line-height: 1.7;
+  max-width: 86ch;
+}
+.pf-notes li { padding: 4px 0 4px 18px; position: relative; }
+.pf-notes li::before { content: "—"; position: absolute; left: 0; color: #46596B; }
+
+.pf-warns { margin-top: 22px; }
+.pf-warns .pf-notes li { color: var(--doubt); }
+
+/* The second line of the benchmark callout, inside the same amber box. */
+.pf-callout-more { margin-top: 8px; }
+
+/* The hero is the argument of the whole panel, so it gets the room to be one. */
+.pf-hero { margin-top: 30px; padding-top: 22px; border-top: 1px solid var(--grid); }
+.pf-hero .mfig { margin-top: 0; }
+
+/* The book's own row in the benchmark table, so the comparison has an anchor. */
+.m-table tr.pf-mine th, .m-table tr.pf-mine td { color: var(--vellum); }
+.m-table tr.pf-mine th { border-left: 2px solid var(--signal); padding-left: 10px; }
+
+/* SVG text: the asset class under a symbol, the multiple at the end of a hero
+   row, and the one annotation that names the book's own line. */
+.pf-class-t { font-family: var(--data); font-size: 9px; fill: var(--chalk); }
+.pf-ratio { font-family: var(--data); font-size: 13px; fill: var(--vellum); }
+.pf-annot-strong { font-weight: 600; }
+
+.pf-bar { opacity: .88; }
+.pf-area { stroke: var(--ground); stroke-width: .4; opacity: .82; }
+
+.pf-s1 { fill: var(--pf-s1); } .pf-s2 { fill: var(--pf-s2); }
+.pf-s3 { fill: var(--pf-s3); } .pf-s4 { fill: var(--pf-s4); }
+.pf-s5 { fill: var(--pf-s5); } .pf-s6 { fill: var(--pf-s6); }
+.pf-s7 { fill: var(--pf-s7); } .pf-s8 { fill: var(--pf-s8); }
+.pf-s9 { fill: var(--pf-s9); } .pf-s10 { fill: var(--pf-s10); }
+.pf-s11 { fill: var(--pf-s11); } .pf-s12 { fill: var(--pf-s12); }
+/* Cash is not a holding and is not coloured like one. */
+.pf-cash { fill: var(--chalk); opacity: .3; }
+
+.m-legend .pf-s1 { color: var(--pf-s1); } .m-legend .pf-s2 { color: var(--pf-s2); }
+.m-legend .pf-s3 { color: var(--pf-s3); } .m-legend .pf-s4 { color: var(--pf-s4); }
+.m-legend .pf-s5 { color: var(--pf-s5); } .m-legend .pf-s6 { color: var(--pf-s6); }
+.m-legend .pf-s7 { color: var(--pf-s7); } .m-legend .pf-s8 { color: var(--pf-s8); }
+.m-legend .pf-s9 { color: var(--pf-s9); } .m-legend .pf-s10 { color: var(--pf-s10); }
+.m-legend .pf-s11 { color: var(--pf-s11); } .m-legend .pf-s12 { color: var(--pf-s12); }
+.m-legend .pf-cash { color: var(--chalk); opacity: .6; }
+
+
+/* ---------------------------------------------------- the book, responsive */
+
+@media (max-width: 980px) {
+  #panel-portfolio { padding: 18px; }
+  .pf-row { gap: 8px; }
+  .pf-row .pf-wlab { margin-left: 0; }
+}
+@media (max-width: 640px) {
+  #panel-portfolio { padding: 16px; }
+  .pf-sym { min-width: 0; flex: 1 1 100%; }
+  .pf-row input[type="number"] { flex: 1 1 auto; width: auto; }
+}
