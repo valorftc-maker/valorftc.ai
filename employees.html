@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Valor — Employee sign-in</title>
+<meta name="description" content="Internal access to the Valor research desk.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20fill='%230E141C'/%3E%3Cpath%20d='M8%2044%20L24%2020%20L36%2038%20L56%2010'%20fill='none'%20stroke='%2345D6BE'%20stroke-width='4'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root{
+  --ground:#0E141C; --panel:#131C27; --grid:#1E2A39; --well:#0F1721;
+  --vellum:#C9D8E5; --chalk:#8598AC;
+  --signal:#45D6BE; --doubt:#E5A63C; --fault:#E2685F;
+  --display:"Space Grotesk",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --data:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--ground);color:var(--vellum);font-family:var(--display);
+  font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;min-height:100vh;
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),
+                   linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:48px 48px;background-position:-1px -1px;background-attachment:fixed;
+}
+a{color:var(--signal);text-decoration:none}
+:focus-visible{outline:2px solid var(--signal);outline-offset:2px;border-radius:2px}
+.wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:32px 20px}
+.in{width:100%;max-width:520px}
+.mark{display:flex;align-items:center;gap:10px;font-weight:700;font-size:23px;letter-spacing:-.02em;margin-bottom:8px}
+.mark svg{width:23px;height:23px}
+.eyebrow{font-family:var(--data);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--chalk);margin-bottom:26px}
+h1{font-weight:700;font-size:clamp(1.7rem,4vw,2.3rem);line-height:1.08;letter-spacing:-.02em;margin-bottom:12px}
+.lead{color:var(--chalk);margin-bottom:26px;max-width:48ch}
+.card{background:var(--panel);border:1px solid var(--grid);border-radius:4px;padding:26px;margin-bottom:18px}
+.go{display:flex;align-items:center;justify-content:center;gap:.6em;width:100%;
+  font-family:var(--data);font-size:13px;letter-spacing:.06em;text-transform:uppercase;
+  padding:15px 18px;border:1px solid rgba(69,214,190,.45);border-radius:3px;
+  background:transparent;color:var(--signal);cursor:pointer;transition:background .15s,border-color .15s}
+.go:hover{background:rgba(69,214,190,.08);border-color:var(--signal)}
+.host{font-family:var(--data);font-size:12px;color:var(--chalk);text-align:center;margin-top:12px;word-break:break-all}
+.host b{color:var(--vellum);font-weight:500}
+.steps{list-style:none;counter-reset:s}
+.steps li{counter-increment:s;position:relative;padding:0 0 16px 34px;font-size:14px;color:var(--chalk);line-height:1.6}
+.steps li::before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:0;
+  font-family:var(--data);font-size:11px;color:var(--signal)}
+.steps li:last-child{padding-bottom:0}
+.steps b{color:var(--vellum);font-weight:500}
+.k{font-family:var(--data);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--chalk);margin-bottom:14px}
+.note{display:flex;gap:12px;padding:13px 15px;border:1px solid rgba(229,166,60,.4);
+  border-left:3px solid var(--doubt);background:rgba(229,166,60,.07);border-radius:2px;
+  font-family:var(--data);font-size:11.5px;color:var(--vellum);line-height:1.65;margin-bottom:18px}
+.fine{font-family:var(--data);font-size:10.5px;color:var(--chalk);line-height:1.75;opacity:.85}
+.back{font-family:var(--data);font-size:11.5px;color:var(--chalk);display:inline-block;margin-top:22px}
+.back:hover{color:var(--vellum)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <main class="in">
+    <div class="mark">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 44 L24 20 L36 38 L56 10" fill="none" stroke="#45D6BE" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Valor
+    </div>
+    <div class="eyebrow">Internal · employee access</div>
+
+    <h1>Sign in to the research desk.</h1>
+    <p class="lead">The desk is not on the public internet. Connect to the company network first, then sign in with your own account and authenticator.</p>
+
+    <div class="card">
+      <div class="k">Open the desk</div>
+      <a class="go" id="desk-link" href="#" rel="noopener">Go to the desk →</a>
+      <p class="host">Desk address: <b id="desk-host">not configured yet</b></p>
+    </div>
+
+    <div class="note">
+      <span>If the page does not load, you are not on the network. Open your VPN client, confirm it says connected, then try again — the desk is invisible from outside it, by design.</span>
+    </div>
+
+    <div class="card">
+      <div class="k">First time?</div>
+      <ol class="steps">
+        <li>Ask an admin to create your account — you'll set your own <b>password</b> on the spot, and it is never sent by email.</li>
+        <li>Add the <b>authenticator secret</b> to 1Password, Authy, or Google Authenticator, and store your <b>recovery codes</b> somewhere safe. They are shown once.</li>
+        <li>Connect to the <b>VPN</b>, then open the desk and sign in with your username, password, and the six-digit code.</li>
+      </ol>
+    </div>
+
+    <p class="fine">
+      Five wrong attempts lock an account for fifteen minutes. Sessions end after 1 hour idle or 12 hours absolute. Every sign-in, failure, and permission denial is written to an append-only audit log.
+      Access to the desk grants research and paper-trading only — live routing remains blocked in code, for everyone, regardless of role.
+    </p>
+
+    <a class="back" href="/">← valorftc.ai</a>
+  </main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  /* ------------------------------------------------------------------ *
+   * The desk's address. Change this one line when your tailnet name is
+   * known, e.g. "https://mac-studio.tail1234.ts.net:8443".
+   *
+   * Nothing secret belongs here: this file is public. The desk itself does
+   * the authenticating, on its own origin, so no password is ever typed
+   * into a page served from valorftc.ai.
+   * ------------------------------------------------------------------ */
+  var DESK_URL = "";
+
+  var link = document.getElementById("desk-link");
+  var host = document.getElementById("desk-host");
+
+  if (DESK_URL) {
+    link.href = DESK_URL;
+    host.textContent = DESK_URL.replace(/^https?:\/\//, "");
+  } else {
+    link.setAttribute("aria-disabled", "true");
+    link.style.opacity = ".5";
+    link.style.cursor = "not-allowed";
+    link.textContent = "Desk address not set";
+    link.addEventListener("click", function (e) { e.preventDefault(); });
+    host.innerHTML = "ask an admin for the address";
+  }
+})();
+</script>
+</body>
+</html>
