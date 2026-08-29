@@ -6,6 +6,17 @@
 <meta name="color-scheme" content="dark">
 <title>Valor FTC — Systematic trading, measured honestly.</title>
 <meta name="description" content="Valor FTC is a systematic trading firm. Seven years designing, testing, and running algorithmic strategies — and killing the ones that didn't survive costs, multiple-testing, and walk-forward. A portfolio of production bots, institutional risk governance, and a track record built to be audited.">
+<meta name="theme-color" content="#0E141C">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://valorftc.ai/">
+<meta property="og:title" content="Valor FTC — Systematic trading, measured honestly.">
+<meta property="og:description" content="Seven years designing, testing, and killing algorithmic strategies. What's left is a portfolio of production bots with edge you can audit — and a live desk you can watch.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Valor FTC — Systematic trading, measured honestly.">
+<meta name="twitter:description" content="A systematic trading firm whose track record is built to be audited. Watch the desk run live.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20fill='%230E141C'/%3E%3Cpath%20d='M8%2044%20L24%2020%20L36%2038%20L56%2010'%20fill='none'%20stroke='%2345D6BE'%20stroke-width='4'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
 :root{
@@ -68,6 +79,27 @@ header{position:sticky;top:0;z-index:50;background:rgba(14,20,28,.9);-webkit-bac
 .btn.primary{border-color:rgba(69,214,190,.45);color:var(--signal)}
 .btn.primary:hover{background:var(--signal-soft);border-color:var(--signal)}
 .btn.ghost{background:transparent;border-style:dashed}
+/* --- professional pass (2026-08-28): rhythm, restraint, and one live door --- */
+.nav a{white-space:nowrap}
+.nav .nav-live{color:var(--signal)}
+.nav .nav-live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--signal);margin-right:6px;vertical-align:1px;animation:pulse 2.4s var(--ease) infinite}
+body{background-image:
+    radial-gradient(1200px 700px at 20% -10%, rgba(69,214,190,.05), transparent 60%),
+    linear-gradient(rgba(30,42,57,.5) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30,42,57,.5) 1px, transparent 1px);
+  background-size:auto, 56px 56px, 56px 56px}
+h1{letter-spacing:-.035em;text-wrap:balance}
+.lead{text-wrap:pretty}
+section[id]{scroll-margin-top:76px}
+.btn{transition:border-color .15s,background .15s,transform .15s var(--ease),box-shadow .15s}
+.btn:hover{transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.btn.primary:hover{box-shadow:0 4px 18px rgba(69,214,190,.12)}
+@media (prefers-reduced-motion: reduce){
+  html{scroll-behavior:auto}
+  .btn:hover{transform:none}
+  .dot,.nav .nav-live::before{animation:none}
+}
 
 /* sections */
 section{scroll-margin-top:74px}
@@ -289,6 +321,7 @@ footer{border-top:1px solid var(--grid);padding:44px 0 40px}
       <a href="#method" data-nav="method">Method</a>
       <a href="#risk" data-nav="risk">Risk</a>
       <a href="#seven-years" data-nav="seven-years">7 years</a>
+      <a href="/hj/" class="nav-live">Live desk</a>
     </nav>
     <div class="hd-right">
       <span class="status-pill"><span class="dot" aria-hidden="true"></span>11 strategies live</span>
@@ -302,6 +335,7 @@ footer{border-top:1px solid var(--grid);padding:44px 0 40px}
     <a href="#method">Method</a>
     <a href="#risk">Risk</a>
     <a href="#seven-years">7 years</a>
+    <a href="/hj/">Live desk</a>
     <a href="#acquire">Acquire Valor FTC</a>
     <a href="/employees.html" rel="nofollow">Access Tools</a>
   </nav>
