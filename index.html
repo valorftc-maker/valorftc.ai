@@ -95,10 +95,17 @@ section[id]{scroll-margin-top:76px}
 .btn:hover{transform:translateY(-1px)}
 .btn:active{transform:translateY(0)}
 .btn.primary:hover{box-shadow:0 4px 18px rgba(69,214,190,.12)}
+/* entrance motion (ui-ux-pro-max presets: fade-rise 12px, 350ms, tiny stagger).
+   Gated on html.js so crawlers and no-JS visitors always see final state. */
+html.js .rv{opacity:0;transform:translateY(12px);
+  transition:opacity .35s var(--ease),transform .35s var(--ease);
+  transition-delay:var(--rvd,0ms)}
+html.js .rv.in{opacity:1;transform:none}
 @media (prefers-reduced-motion: reduce){
   html{scroll-behavior:auto}
   .btn:hover{transform:none}
   .dot,.nav .nav-live::before{animation:none}
+  html.js .rv{opacity:1;transform:none;transition:none}
 }
 
 /* sections */
@@ -844,6 +851,44 @@ footer{border-top:1px solid var(--grid);padding:44px 0 40px}
       if (taps >= 3) { taps = 0; open_(); }
     });
   }
+})();
+</script>
+<script>
+(function () {
+  document.documentElement.classList.add('js');
+  if (!('IntersectionObserver' in window)) { document.documentElement.classList.remove('js'); return; }
+  var singles = ['#hero .eyebrow', '#hero h1', '#hero .lead', '#hero .btn-row',
+                 '.sec .q-head', '.sec h2', '.sec .lead'];
+  var groups = ['.stat', '.card', '.strategy', '.m-step', '.risk-item', '.tile'];
+  var targets = [];
+  singles.forEach(function (s) {
+    document.querySelectorAll(s).forEach(function (el) { targets.push(el); });
+  });
+  groups.forEach(function (s) {
+    var i = 0;
+    document.querySelectorAll(s).forEach(function (el) {
+      el.style.setProperty('--rvd', (Math.min(i, 8) * 40) + 'ms');   // <=0.04s per item, capped
+      targets.push(el); i++;
+    });
+  });
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+    });
+  }, { rootMargin: '0px 0px -10% 0px' });
+  targets.forEach(function (el) { el.classList.add('rv'); io.observe(el); });
+  // Content is sacred: if the observer stalls for any reason (heavy main
+  // thread, exotic browser), everything still in hiding walks on stage.
+  function revealStragglers() {
+    document.querySelectorAll('.rv:not(.in)').forEach(function (el) {
+      var r = el.getBoundingClientRect();
+      if (r.top < window.innerHeight && r.bottom > 0) el.classList.add('in');
+    });
+  }
+  window.addEventListener('scroll', revealStragglers, { passive: true });
+  setTimeout(function () {
+    document.querySelectorAll('.rv:not(.in)').forEach(function (el) { el.classList.add('in'); });
+  }, 2500);
 })();
 </script>
 </body>
