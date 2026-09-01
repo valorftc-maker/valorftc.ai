@@ -12,6 +12,7 @@
     display: none; color: #8da0bb; font-family: ui-monospace, Menlo, monospace;
     font-size: 14px; padding: 48px 24px; text-align: center; line-height: 1.7;
   }
+  .down a { color: #5aa9e6; }
   .offline .down { display: block; }
   .offline iframe { display: none; }
 </style>
@@ -23,29 +24,42 @@
 <div class="down">
   The live desk is off the air right now.<br>
   The broadcast streams straight from the firm's own machine &mdash; check back shortly &mdash;
-  this page retries on its own.
+  this page retries on its own.<br><br>
+  <a href="https://valorpc.tail53cfa4.ts.net/">Open the live desk directly</a>
 </div>
 <script>
-  // Judge liveness by the embed itself. A separate health fetch gets eaten by
-  // ad-blockers (ERR_BLOCKED_BY_CLIENT) and falsely reported an outage: the
-  // iframe is the broadcast, so the iframe is also the test. While marked
-  // offline, the page quietly retries every 20 seconds and recovers itself.
-  (function () {
-    var f = document.getElementById('desk');
-    var timer = null;
-    function armTimeout() {
-      clearTimeout(timer);
-      timer = setTimeout(function () {
-        document.body.className = 'offline';
-        setTimeout(function () { f.src = f.src; armTimeout(); }, 20000);
-      }, 15000);
-    }
-    f.addEventListener('load', function () {
-      clearTimeout(timer);
-      document.body.className = '';
-    });
-    armTimeout();
-  })();
+(function () {
+  var DESK = 'https://valorpc.tail53cfa4.ts.net/';
+  var f = document.getElementById('desk');
+  var timer = null;
+
+  // Devices carrying the firm's own VPN resolve the desk to a private address,
+  // and Chrome's Local Network Access rules refuse to EMBED a private-network
+  // page inside a public one - the iframe stays blank forever while a plain
+  // navigation to the same URL is allowed. The probe below fails in
+  // milliseconds on exactly those devices (and only stalls when the desk is
+  // truly down), so: probe first; if embedding is impossible, walk through the
+  // front door instead of framing it.
+  fetch(DESK, { mode: 'no-cors', cache: 'no-store' }).then(function () {
+    // reachable as a subresource: the iframe path works - let it run
+  }).catch(function () {
+    // blocked or down; a top-level hop answers both better than a white box
+    location.replace(DESK);
+  });
+
+  function armTimeout() {
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      document.body.className = 'offline';
+      setTimeout(function () { f.src = f.src; armTimeout(); }, 20000);
+    }, 15000);
+  }
+  f.addEventListener('load', function () {
+    clearTimeout(timer);
+    document.body.className = '';
+  });
+  armTimeout();
+})();
 </script>
 </body>
 </html>
