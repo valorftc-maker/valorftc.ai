@@ -5,112 +5,63 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Valor FTC</title>
-<meta name="description" content="Valor FTC is a systematic trading firm. Read the firm's record and method, or log in to watch the live desk.">
+<meta name="description" content="Valor FTC is a systematic trading desk. Sign in to read the record and the method, or to watch the live desk.">
 <meta name="theme-color" content="#0E141C">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://valorftc.ai/">
 <meta property="og:title" content="Valor FTC — Systematic trading, measured honestly.">
-<meta property="og:description" content="Seven years designing, testing, and killing algorithmic strategies. Read the record, or log in to the live desk.">
+<meta property="og:description" content="A desk that publishes what it measures. Sign in to read the record, or to watch the live desk.">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Valor FTC">
-<meta name="twitter:description" content="Systematic trading, measured honestly. Read the record, or log in to the live desk.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20fill='%230E141C'/%3E%3Cpath%20d='M8%2044%20L24%2020%20L36%2038%20L56%2010'%20fill='none'%20stroke='%2345D6BE'%20stroke-width='4'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<meta name="twitter:description" content="Systematic trading, measured honestly. Sign in to read the record, or to watch the live desk.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20fill='%230E141C'/%3E%3Cpath%20d='M8%2044%20L24%2020%20L36%2038%20L56%2010'%20fill='none'%20stroke='%2345D6BE'%20stroke-width='6'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
-  :root{
-    --ground:#0E141C; --panel:#131C27; --grid:#1E2A39; --well:#0F1721; --line:#26374A;
-    --vellum:#C9D8E5; --chalk:#8598AC; --chalk-dim:#74899E;
-    --signal:#45D6BE; --signal-soft:rgba(69,214,190,.10);
-    --display:"Space Grotesk",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-    --data:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-    --ease:cubic-bezier(.2,.8,.3,1);
-    color-scheme:dark;
+  html, body { margin: 0; height: 100%; background: #0E141C; }
+  iframe { display: block; width: 100%; height: 100vh; border: 0; }
+  .down {
+    display: none; color: #8598AC; font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 14px; padding: 48px 24px; text-align: center; line-height: 1.7;
   }
-  *{box-sizing:border-box}
-  html,body{height:100%}
-  body{
-    margin:0; background:var(--ground); color:var(--vellum);
-    font-family:var(--display); -webkit-font-smoothing:antialiased;
-    background-image:
-      radial-gradient(1200px 700px at 20% -10%, rgba(69,214,190,.05), transparent 60%),
-      linear-gradient(rgba(30,42,57,.5) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(30,42,57,.5) 1px, transparent 1px);
-    background-size:auto, 56px 56px, 56px 56px;
-    display:flex; flex-direction:column; min-height:100%;
-  }
-  a{color:inherit;text-decoration:none}
-  main{flex:1 1 auto;display:flex;align-items:center;justify-content:center;padding:40px 24px}
-  .card{width:100%;max-width:660px}
-  .mark{display:inline-flex;align-items:center;gap:10px;margin-bottom:34px}
-  .mark svg{width:34px;height:34px;display:block}
-  .mark b{font-weight:700;font-size:19px;letter-spacing:.01em}
-  .eyebrow{
-    font-family:var(--data);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
-    color:var(--chalk);margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-  }
-  .dot{width:6px;height:6px;border-radius:50%;background:var(--signal);display:inline-block;
-       animation:pulse 2.4s var(--ease) infinite}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-  h1{
-    font-weight:500;font-size:clamp(1.9rem,5vw,2.9rem);line-height:1.08;letter-spacing:-.035em;
-    margin:0 0 16px;text-wrap:balance;
-  }
-  h1 .u{color:var(--signal)}
-  p.lead{
-    color:var(--chalk);font-size:15px;line-height:1.65;margin:0 0 34px;max-width:52ch;text-wrap:pretty;
-  }
-  .doors{display:flex;gap:14px;flex-wrap:wrap}
-  .btn{
-    display:inline-flex;align-items:center;gap:.55em;font-family:var(--data);font-size:12px;
-    letter-spacing:.05em;text-transform:uppercase;padding:15px 22px;border:1px solid var(--grid);
-    border-radius:3px;background:var(--panel);color:var(--vellum);
-    transition:border-color .15s,background .15s,transform .15s var(--ease),box-shadow .15s;
-  }
-  .btn:hover{border-color:var(--chalk);transform:translateY(-1px)}
-  .btn:active{transform:translateY(0)}
-  .btn:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
-  .btn.primary{border-color:rgba(69,214,190,.45);color:var(--signal)}
-  .btn.primary:hover{background:var(--signal-soft);border-color:var(--signal);box-shadow:0 4px 18px rgba(69,214,190,.12)}
-  footer{
-    flex:0 0 auto;padding:20px 24px;border-top:1px solid var(--grid);
-    font-family:var(--data);font-size:10.5px;letter-spacing:.06em;color:var(--chalk-dim);
-    display:flex;gap:18px;flex-wrap:wrap;align-items:center;justify-content:space-between;
-  }
-  footer a:hover{color:var(--vellum)}
-  @media (max-width:560px){ .doors{flex-direction:column;align-items:stretch} .btn{justify-content:center} }
-  @media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important} }
+  .down a { color: #45D6BE; }
+  .offline .down { display: block; }
+  .offline iframe { display: none; }
 </style>
 </head>
 <body>
-<main>
-  <div class="card">
-    <a class="mark" href="/" aria-label="Valor FTC">
-      <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 44 L24 20 L36 38 L56 10" fill="none" stroke="#45D6BE" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <b>Valor FTC</b>
-    </a>
-    <div class="eyebrow"><span class="dot" aria-hidden="true"></span><span>Systematic trading desk</span> &middot; <span>trading live since 2019</span></div>
-    <h1>Trading systems that survive the <span class="u">measurement</span>.</h1>
-    <p class="lead">Seven years designing, backtesting, and killing algorithmic strategies. Read the record and the method, or log in and watch the desk trade.</p>
-    <div class="doors">
-      <a class="btn primary" href="/info/">Info &mdash; the firm, the record, the method &rarr;</a>
-      <a class="btn" href="/hj/">Log in to the live desk &rarr;</a>
-    </div>
-  </div>
-</main>
-<footer>
-  <span>Valor FTC &middot; systematic trading, measured honestly</span>
-  <span><a href="/info/">Info</a> &middot; <a href="/hj/">Live desk</a> &middot; <a href="/employees.html" rel="nofollow">Access Tools</a></span>
-</footer>
+<iframe id="home" title="Valor FTC — sign in" loading="eager" referrerpolicy="no-referrer"></iframe>
+<div class="down">
+  Valor FTC's front door is served from the desk itself, behind a sign-in, and the desk is
+  off the air right now. Check back shortly &mdash; this page retries on its own.<br><br>
+  <a id="direct" href="https://valorpc.tail53cfa4.ts.net/home">Open it directly</a>
+</div>
 <script>
-/* Old deep links pointed at sections of this page; the writing now lives at
-   /info/. Forward the anchor rather than dropping the visitor on a page that
-   no longer has that section. */
 (function () {
+  /* THE FRONT DOOR (owner, 2026-09-06): the home page is a sign-in. The page
+     itself lives on the desk (/home, behind the same username + password as
+     the live desk); this wrapper frames it, like /hj/ and /info/. Old deep
+     links to sections of the write-up still forward to /info/. */
   var SECTIONS = ['hero', 'proof', 'record', 'survive', 'strategies', 'method', 'risk', 'seven-years', 'acquire'];
   var h = (location.hash || '').replace('#', '');
-  if (h && SECTIONS.indexOf(h) >= 0) location.replace('/info/#' + h);
+  if (h && SECTIONS.indexOf(h) >= 0) { location.replace('/info/#' + h); return; }
+  var DESK = 'https://valorpc.tail53cfa4.ts.net/home';
+  var f = document.getElementById('home');
+  var timer = null;
+  f.src = DESK;
+  fetch(DESK, { mode: 'no-cors', cache: 'no-store' }).then(function () {
+    // reachable as a subresource: the frame path works
+  }).catch(function () {
+    // blocked (private-network embedding refused) or down: walk in the front door
+    location.replace(DESK);
+  });
+  function armTimeout() {
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      document.body.className = 'offline';
+      setTimeout(function () { f.src = DESK; armTimeout(); }, 20000);
+    }, 15000);
+  }
+  f.addEventListener('load', function () { clearTimeout(timer); document.body.className = ''; });
+  armTimeout();
 })();
 </script>
 </body>
