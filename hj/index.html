@@ -48,17 +48,50 @@
     location.replace(DESK);
   });
 
+  /* THE 15-SECOND RACE IS OVER (owner, 2026-09-09: "on my iphone it just
+     keeps resetting at or after the systems check"). This timer used to reset
+     the iframe after 15s, then every 20s - but the tower is a multi-megabyte
+     page, and on a phone over cellular through the funnel it simply cannot
+     finish in 15 seconds. The reset killed it mid-systems-check, re-armed,
+     and killed it again: the loop WAS this wrapper. Now: 90 seconds before
+     the first retry, each retry backs off (90s -> 3m -> 6m, capped), and any
+     sign of life from the desk - the frame's load event OR its first
+     postMessage (the tab-title bridge fires long before a slow load event) -
+     stands the timer down for good. */
+  var alive = false, waitMs = 90000;
   function armTimeout() {
     clearTimeout(timer);
+    if (alive) return;
     timer = setTimeout(function () {
+      if (alive) return;
       document.body.className = 'offline';
-      setTimeout(function () { f.src = f.src; armTimeout(); }, 20000);
-    }, 15000);
+      setTimeout(function () {
+        if (alive) return;
+        f.src = f.src;
+        waitMs = Math.min(waitMs * 2, 360000);
+        armTimeout();
+      }, 20000);
+    }, waitMs);
   }
-  f.addEventListener('load', function () {
+  function deskIsAlive() {
+    alive = true;
     clearTimeout(timer);
     document.body.className = '';
-  });
+  }
+  // THE NUMBER IN THE TAB (owner, 2026-09-06). The Tower runs cross-origin in
+  // the iframe below, so it cannot write this page's title; it posts its
+  // all-time P/L up instead and this page writes its own tab. Only messages
+  // from the desk's own origin are believed.
+  window.addEventListener('message', function (e) {
+    if (e.origin !== 'https://valorpc.tail53cfa4.ts.net') return;
+    deskIsAlive();                       // a message IS proof of life
+    var d = e.data;
+    if (!d || d.tht !== 'pl' || typeof d.text !== 'string') return;
+    if (d.text.length > 24) return;
+    document.title = d.text + ' \u00b7 Valor \u2014 The Hybrid Tower, live';
+  }, false);
+
+  f.addEventListener('load', function () { deskIsAlive(); });
   armTimeout();
 })();
 </script>

@@ -28,6 +28,17 @@
 </div>
 <script>
 (function () {
+  // THE NUMBER IN THE TAB (owner, 2026-09-06). The write-up is served from the
+  // desk, cross-origin, so it cannot write this page's title; it posts its
+  // all-time P/L up and this page writes its own tab. Only the desk's own
+  // origin is believed.
+  window.addEventListener('message', function (e) {
+    if (e.origin !== 'https://valorpc.tail53cfa4.ts.net') return;
+    var d = e.data;
+    if (!d || d.tht !== 'pl' || typeof d.text !== 'string' || d.text.length > 24) return;
+    document.title = d.text + ' \u00b7 Valor FTC \u2014 Info';
+  }, false);
+
   // Same door as /hj/: the page lives on the desk (behind its sign-in) and is
   // framed here; the section anchor (#record, #proof ...) rides along.
   var DESK = 'https://valorpc.tail53cfa4.ts.net/info';
